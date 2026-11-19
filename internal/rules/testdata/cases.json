@@ -1,0 +1,67 @@
+[
+  {
+    "name": "spec example",
+    "rules": ["a/", "c/", "!c/**/node_modules/", "src/**/*.go"],
+    "cases": [
+      { "path": "a", "dir": true, "in": true, "rule": 0 },
+      { "path": "a", "dir": false, "in": false, "rule": -1 },
+      { "path": "a/x/y.txt", "in": true, "rule": 0 },
+      { "path": "b/z.txt", "in": false, "rule": -1 },
+      { "path": "c/lib/index.ts", "in": true, "rule": 1 },
+      { "path": "c/node_modules", "dir": true, "in": false, "rule": 2 },
+      { "path": "c/node_modules/react/x.js", "in": false, "rule": 2 },
+      { "path": "c/a/b/node_modules/x.js", "in": false, "rule": 2 },
+      { "path": "node_modules/x.js", "in": false, "rule": -1 },
+      { "path": "src/main.go", "in": true, "rule": 3 },
+      { "path": "src/pkg/a/b.go", "in": true, "rule": 3 },
+      { "path": "src/readme.md", "in": false, "rule": -1 },
+      { "path": "d/src/main.go", "in": false, "rule": -1 }
+    ]
+  },
+  {
+    "name": "last rule wins, re-include",
+    "rules": ["*.log", "!debug.log", "build/", "!build/keep/", "build/keep/important.txt"],
+    "cases": [
+      { "path": "x.log", "in": true, "rule": 0 },
+      { "path": "deep/er/y.log", "in": true, "rule": 0 },
+      { "path": "debug.log", "in": false, "rule": 1 },
+      { "path": "deep/debug.log", "in": false, "rule": 1 },
+      { "path": "build/out.bin", "in": true, "rule": 2 },
+      { "path": "build/keep", "dir": true, "in": false, "rule": 3 },
+      { "path": "build/keep/a.txt", "in": false, "rule": 3 },
+      { "path": "build/keep/important.txt", "in": true, "rule": 4 },
+      { "path": "logs/x.txt", "in": false, "rule": -1 }
+    ]
+  },
+  {
+    "name": "wildcards, comments and blank lines",
+    "rules": ["data/batch-??.csv", "img/[abc]*.png", "img/[!x]y.png", "**/cache/", "# comment", "", "docs/**"],
+    "cases": [
+      { "path": "data/batch-01.csv", "in": true, "rule": 0 },
+      { "path": "data/batch-1.csv", "in": false, "rule": -1 },
+      { "path": "data/x/batch-01.csv", "in": false, "rule": -1 },
+      { "path": "img/apple.png", "in": true, "rule": 1 },
+      { "path": "img/dog.png", "in": false, "rule": -1 },
+      { "path": "img/ay.png", "in": true, "rule": 2 },
+      { "path": "img/xy.png", "in": false, "rule": -1 },
+      { "path": "a/b/cache/f.bin", "in": true, "rule": 3 },
+      { "path": "cache/f.bin", "in": true, "rule": 3 },
+      { "path": "cache", "dir": false, "in": false, "rule": -1 },
+      { "path": "docs/a/b.md", "in": true, "rule": 6 },
+      { "path": "docs", "dir": true, "in": false, "rule": -1 }
+    ]
+  },
+  {
+    "name": "regex metacharacters are literal",
+    "rules": ["a.b", "x+y/", "(p)", "/rooted.txt"],
+    "cases": [
+      { "path": "a.b", "in": true, "rule": 0 },
+      { "path": "axb", "in": false, "rule": -1 },
+      { "path": "deep/a.b", "in": true, "rule": 0 },
+      { "path": "x+y/z", "in": true, "rule": 1 },
+      { "path": "(p)", "in": true, "rule": 2 },
+      { "path": "rooted.txt", "in": true, "rule": 3 },
+      { "path": "sub/rooted.txt", "in": false, "rule": -1 }
+    ]
+  }
+]

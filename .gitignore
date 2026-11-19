@@ -1,0 +1,7 @@
+node_modules/
+web/dist/
+/dist/
+*.exe
+.DS_Store
+internal/panel/dist/*
+!internal/panel/dist/.keep
