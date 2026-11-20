@@ -66,6 +66,9 @@ release (or since the first commit) and a Full Changelog link.
   upgrade check and `install.sh` download).
 
 The tag logic is `.github/scripts/tag.sh`, the notes `.github/scripts/notes.sh`.
+`bash .github/test-release/scenarios.sh` runs the whole workflow locally
+against a fake GitHub (every path: first release, re-runs, existing tags,
+an older-line fix, a failed upload) before you change it.
 The upgrade check and `install.sh` read the releases without a token, so they
 need a public repository. Files: `fdsync-server-windows-{amd64,arm64}.exe`,
 `fdsync-server-linux-amd64`, `fdsync-linux-{amd64,arm64}`, `SHA256SUMS`.

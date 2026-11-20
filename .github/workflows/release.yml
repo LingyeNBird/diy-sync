@@ -52,28 +52,25 @@ jobs:
             echo "::error::Release v$VERSION already exists"
             exit 1
           fi
-          .github/scripts/tag.sh --check "$VERSION" "$GITHUB_SHA"
+          bash .github/scripts/tag.sh --check "$VERSION" "$GITHUB_SHA"
 
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 12.15.0
-
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          cache: pnpm
-          cache-dependency-path: web/pnpm-lock.yaml
 
       - name: Build the panel
         working-directory: web
         run: |
+          npm install --global pnpm@12.15.0
+          pnpm --version
           pnpm install --frozen-lockfile
           pnpm build
+          test -f ../internal/panel/dist/index.html
 
       - name: Build the executables
         env:
@@ -85,7 +82,7 @@ jobs:
           # program os arch [extra ldflags]
           build() {
             local name="$1-$2-$3"
-            [ "$2" = windows ] && name="$name.exe"
+            if [ "$2" = windows ]; then name="$name.exe"; fi
             echo "→ $name"
             GOOS="$2" GOARCH="$3" go build -trimpath -ldflags "$ld ${4:-}" -o "out/$name" "./cmd/$1"
           }
@@ -127,13 +124,13 @@ jobs:
       # even if the branch moved on meanwhile.
       - name: Create and push the tag
         id: tag
-        run: .github/scripts/tag.sh "$VERSION" "$GITHUB_SHA"
+        run: bash .github/scripts/tag.sh "$VERSION" "$GITHUB_SHA"
 
       - name: Write the release notes
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          .github/scripts/notes.sh "$VERSION" "$GITHUB_SHA" "$GITHUB_REPOSITORY" > notes.md
+          bash .github/scripts/notes.sh "$VERSION" "$GITHUB_SHA" "$GITHUB_REPOSITORY" > notes.md
           cat notes.md
 
       - name: Publish the release
@@ -142,7 +139,7 @@ jobs:
         run: |
           # "Latest" (what the updater and install.sh fetch) only if no
           # higher version was released before.
-          latest=$(.github/scripts/releases.sh latest "$VERSION" "$GITHUB_REPOSITORY")
+          latest=$(bash .github/scripts/releases.sh latest "$VERSION" "$GITHUB_REPOSITORY")
           gh release create "v$VERSION" out/* \
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \

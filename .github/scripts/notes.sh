@@ -13,7 +13,7 @@ tag="v$version"
 repo_url="${GITHUB_SERVER_URL:-https://github.com}/$repo"
 
 # The release just below this version (not the newest by date).
-prev=$("$(dirname "$0")/releases.sh" previous "$version" "$repo")
+prev=$(bash "$(dirname "$0")/releases.sh" previous "$version" "$repo")
 if [ -n "$prev" ] && git rev-parse -q --verify "refs/tags/$prev^{commit}" >/dev/null; then
   from="$prev"
   range="$prev..$commit"

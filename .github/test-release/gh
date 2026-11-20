@@ -1,0 +1,94 @@
+#!/usr/bin/env python3
+"""Stand-in for the GitHub CLI's release commands, with state in $FAKE_GH_STATE.
+
+Rejects unknown flags so a typo in the workflow fails here too. Needs
+GH_TOKEN like the real one in Actions. --verify-tag looks at the origin repo.
+"""
+import json, os, subprocess, sys
+
+def die(msg, code=1):
+    print(msg, file=sys.stderr)
+    sys.exit(code)
+
+if not os.environ.get("GH_TOKEN"):
+    die("gh: To use GitHub CLI in a GitHub Actions workflow, set the GH_TOKEN environment variable.", 4)
+
+state_path = os.environ["FAKE_GH_STATE"]
+state = json.load(open(state_path)) if os.path.exists(state_path) else {"releases": []}
+def save(): json.dump(state, open(state_path, "w"), indent=1)
+def find(tag): return next((r for r in state["releases"] if r["tag"] == tag), None)
+
+args = sys.argv[1:]
+if args[:1] != ["release"] or len(args) < 2:
+    die(f"fake gh: unsupported command {args}")
+cmd, rest = args[1], args[2:]
+
+def parse(rest, flags, bools=()):
+    """flags: names taking a value; bools: names without one. Returns (opts, positional)."""
+    opts, pos, i = {}, [], 0
+    while i < len(rest):
+        a = rest[i]
+        if a.startswith("--"):
+            name, eq, val = a[2:].partition("=")
+            if name in bools:
+                opts[name] = val if eq else "true"
+            elif name in flags:
+                if not eq:
+                    i += 1
+                    if i >= len(rest): die(f"flag needs an argument: --{name}")
+                    val = rest[i]
+                opts[name] = val
+            else:
+                die(f"unknown flag: --{name}")
+        else:
+            pos.append(a)
+        i += 1
+    return opts, pos
+
+def jq(value, expr):
+    if expr == ".isDraft": return [json.dumps(value["isDraft"])]
+    if expr == ".[].tagName": return [r["tagName"] for r in value]
+    die(f"fake gh: unsupported --jq {expr!r}")
+
+if cmd == "view":
+    o, pos = parse(rest, {"repo", "json", "jq"})
+    r = find(pos[0])
+    if not r: die("release not found")
+    if "json" in o:
+        v = {"isDraft": r["draft"]}
+        print("\n".join(jq(v, o["jq"])) if "jq" in o else json.dumps(v))
+    else:
+        print(f"title:\t{r['title']}\ntag:\t{r['tag']}")
+elif cmd == "list":
+    o, pos = parse(rest, {"repo", "limit", "json", "jq"}, {"exclude-drafts", "exclude-pre-releases"})
+    rs = [r for r in reversed(state["releases"]) if not (o.get("exclude-drafts") and r["draft"])]
+    v = [{"tagName": r["tag"]} for r in rs][: int(o.get("limit", 30))]
+    print("\n".join(jq(v, o["jq"])) if "jq" in o else json.dumps(v))
+elif cmd == "create":
+    o, pos = parse(rest, {"repo", "title", "notes-file", "target"}, {"verify-tag", "latest", "draft"})
+    tag, files = pos[0], pos[1:]
+    if o.get("latest") not in (None, "true", "false"): die(f"invalid argument for --latest: {o['latest']}")
+    if find(tag): die(f"a release with the same tag name already exists: {tag}")
+    if "verify-tag" in o:
+        ok = subprocess.run(["git", "ls-remote", "--exit-code", os.environ["FAKE_GH_ORIGIN"], f"refs/tags/{tag}"],
+                            capture_output=True).returncode == 0
+        if not ok: die(f"tag {tag} doesn't exist in the repo {o['repo']}, aborting due to --verify-tag flag")
+    for f in files:
+        if not os.path.isfile(f): die(f"no such file: {f}")
+    notes = open(o["notes-file"]).read()
+    # Like gh: with files, the release starts as a draft until the uploads finish.
+    r = {"tag": tag, "title": o["title"], "notes": notes, "draft": True, "latest": o.get("latest"), "assets": []}
+    state["releases"].append(r); save()
+    for f in files:
+        if os.environ.get("FAKE_GH_FAIL_UPLOAD") == os.path.basename(f):
+            die(f"HTTP 502: upload of {os.path.basename(f)} failed")
+        r["assets"].append(os.path.basename(f)); save()
+    r["draft"] = False; save()
+    print(f"https://github.com/{o['repo']}/releases/tag/{tag}")
+elif cmd == "delete":
+    o, pos = parse(rest, {"repo"}, {"yes", "cleanup-tag"})
+    if not find(pos[0]): die("release not found")
+    if "yes" not in o: die("--yes required when not running interactively")
+    state["releases"] = [r for r in state["releases"] if r["tag"] != pos[0]]; save()
+else:
+    die(f"fake gh: unsupported release {cmd}")
