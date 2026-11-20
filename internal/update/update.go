@@ -24,7 +24,7 @@ import (
 )
 
 // Repo is the GitHub repository releases come from, "owner/name".
-const Repo = "__GITHUB_REPO__"
+const Repo = "LingyeNBird/diy-sync"
 
 // Version is this build's version, set at build time:
 //

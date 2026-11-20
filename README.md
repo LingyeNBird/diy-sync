@@ -35,7 +35,7 @@ background with a tray icon and can start at login.
 In WSL (puts `fdsync` in `~/.local/bin` and adds that folder to `PATH` in `~/.bashrc`):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/__GITHUB_REPO__/HEAD/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/LingyeNBird/diy-sync/HEAD/install.sh | bash
 ```
 
 Run it again to update. `FDSYNC_VERSION=1.2.3` installs a given version and
@@ -43,7 +43,7 @@ Run it again to update. `FDSYNC_VERSION=1.2.3` installs a given version and
 `curl -fsSL …/install.sh | FDSYNC_VERSION=1.2.3 bash`.
 
 On Windows, download `fdsync-server-windows-amd64.exe` from the
-[releases](https://github.com/__GITHUB_REPO__/releases) and run it. After that,
+[releases](https://github.com/LingyeNBird/diy-sync/releases) and run it. After that,
 the panel's Settings → Check for updates finds new versions; Upgrade downloads
 one, checks its checksum, swaps the exe and restarts it.
 
