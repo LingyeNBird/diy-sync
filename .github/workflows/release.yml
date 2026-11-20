@@ -1,0 +1,169 @@
+# Builds every program for every platform; optionally publishes a release.
+# Run it from Actions → "Build and release" → Run workflow.
+name: Build and release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version: three numbers without the v, e.g. 1.2.3"
+        required: true
+        type: string
+      release:
+        description: "Publish a GitHub release (off: only build)"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# One run per version at a time (a second one waits); different versions
+# and build-only runs don't hold each other up.
+concurrency:
+  group: release-${{ inputs.version }}
+  cancel-in-progress: false
+
+env:
+  VERSION: ${{ inputs.version }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the version
+        run: |
+          n='(0|[1-9][0-9]*)'
+          if ! [[ "$VERSION" =~ ^$n\.$n\.$n$ ]]; then
+            echo "::error::Version must be X.Y.Z without the v and without leading zeros (got \"$VERSION\")"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      # Fail before building, not after: the release exists, or the tag
+      # names another commit. (The tag at this commit is fine: a re-run.)
+      - name: Check the release and tag
+        if: inputs.release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::Release v$VERSION already exists"
+            exit 1
+          fi
+          .github/scripts/tag.sh --check "$VERSION" "$GITHUB_SHA"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.15.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Build the panel
+        working-directory: web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Build the executables
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          ld="-s -w -X fdsync/internal/update.Version=$VERSION"
+          # program os arch [extra ldflags]
+          build() {
+            local name="$1-$2-$3"
+            [ "$2" = windows ] && name="$name.exe"
+            echo "→ $name"
+            GOOS="$2" GOARCH="$3" go build -trimpath -ldflags "$ld ${4:-}" -o "out/$name" "./cmd/$1"
+          }
+          # Windows server: no console window (it lives in the tray).
+          build fdsync-server windows amd64 "-H windowsgui"
+          build fdsync-server windows arm64 "-H windowsgui"
+          build fdsync-server linux amd64 # for testing on Linux
+          # WSL client
+          build fdsync linux amd64
+          build fdsync linux arm64
+          cd out
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fdsync-${{ inputs.version }}
+          path: out/*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: inputs.release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # pushing the tag, creating the release
+    steps:
+      # The whole history and every tag: for the change list and the tag checks.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: fdsync-${{ inputs.version }}
+          path: out
+
+      # The tag names the commit the files were built from ($GITHUB_SHA),
+      # even if the branch moved on meanwhile.
+      - name: Create and push the tag
+        id: tag
+        run: .github/scripts/tag.sh "$VERSION" "$GITHUB_SHA"
+
+      - name: Write the release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          .github/scripts/notes.sh "$VERSION" "$GITHUB_SHA" "$GITHUB_REPOSITORY" > notes.md
+          cat notes.md
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # "Latest" (what the updater and install.sh fetch) only if no
+          # higher version was released before.
+          latest=$(.github/scripts/releases.sh latest "$VERSION" "$GITHUB_REPOSITORY")
+          gh release create "v$VERSION" out/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --latest="$latest" \
+            --title "fdsync $VERSION" \
+            --notes-file notes.md
+
+      # The release failed (or was cancelled) after this run pushed the tag: delete the tag (and
+      # a draft left by a failed upload), so running it again starts clean.
+      - name: Undo the tag after a failure
+        if: (failure() || cancelled()) && steps.tag.outputs.created == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v$VERSION"
+          if draft=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null); then
+            if [ "$draft" != true ]; then
+              echo "::warning::Release $tag was published; keeping its tag"
+              exit 0
+            fi
+            gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes
+          fi
+          git push origin ":refs/tags/$tag"
+          echo "Deleted tag $tag"

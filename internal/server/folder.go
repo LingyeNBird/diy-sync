@@ -121,7 +121,50 @@ func (f *folder) rebuildScopeLocked() bool {
 	hash := hex.EncodeToString(h[:8])
 	changed := hash != f.rulesHash
 	f.scope, f.exclPaths, f.rulesHash = sc, paths, hash
+	if changed && f.store != nil {
+		f.dropOutOfScopeConflictsLocked()
+	}
 	return changed
+}
+
+// dropOutOfScopeConflictsLocked forgets conflicts whose path no longer
+// syncs (excluded, or the sync was cancelled): there is nothing left to
+// decide, and each side keeps its own version. If the path comes back into
+// scope and the versions still differ, the conflict is found again.
+func (f *folder) dropOutOfScopeConflictsLocked() {
+	var dropped []string
+	err := f.store.Update(func(tx *index.Tx) error {
+		b, err := tx.Bucket(bConflicts)
+		if err != nil || b == nil {
+			return err
+		}
+		var gone [][]byte
+		err = b.ForEach(func(k, v []byte) error {
+			var c protocol.Conflict
+			if json.Unmarshal(v, &c) == nil && !f.scope.InScope(c.Path, c.Server.Dir) {
+				gone = append(gone, append([]byte(nil), k...))
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		for _, k := range gone {
+			if err := b.Delete(k); err != nil {
+				return err
+			}
+			dropped = append(dropped, string(k))
+		}
+		return nil
+	})
+	if err != nil {
+		f.log.Error("drop conflicts outside the scope", "folder", f.id, "err", err)
+		return
+	}
+	for _, p := range dropped {
+		f.log.Info("conflict dropped: no longer in scope", "folder", f.id, "path", p)
+		f.event(Event{Kind: "resolve", Path: p, Code: "conflictOutOfScope"})
+	}
 }
 
 // notifyLocked wakes long-polling clients. Call with f.mu held.

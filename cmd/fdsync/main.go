@@ -34,6 +34,7 @@ import (
 	"fdsync/internal/fsx"
 	"fdsync/internal/logfile"
 	"fdsync/internal/protocol"
+	"fdsync/internal/update"
 )
 
 type binds []client.Binding
@@ -62,6 +63,7 @@ Usage:
   fdsync sync   [--bind FOLDER=PATH ...]  one round, then exit
   fdsync status                           show the connection and bindings
   fdsync install-service                  write a systemd user unit for the daemon
+  fdsync version                          print the version
 
 After connect, daemon and sync need no server flags. Without pairing they
 can use the server's shared token: --server URL --token T (or $FDSYNC_TOKEN),
@@ -91,6 +93,9 @@ func main() {
 		return
 	case "install-service":
 		installService()
+		return
+	case "version", "--version", "-v":
+		fmt.Println("fdsync", update.Version)
 		return
 	case "daemon", "sync":
 	default:
@@ -177,7 +182,7 @@ func main() {
 	}
 	hc := &http.Client{Transport: transport}
 	c := &client.Client{
-		Info:    protocol.Hello{Name: host, Distro: distro(), Version: version, NetworkMode: networkMode()},
+		Info:    protocol.Hello{Name: host, Distro: distro(), Version: update.Version, NetworkMode: networkMode()},
 		Trash:   trash,
 		Root:    *browseRoot,
 		BaseURL: strings.TrimRight(*serverURL, "/"),
@@ -306,8 +311,6 @@ func saveBindings(dir string, bs []client.Binding) error {
 	}
 	return os.Rename(tmp, filepath.Join(dir, "bindings.json"))
 }
-
-const version = "0.1.0-dev"
 
 // distro returns PRETTY_NAME from /etc/os-release.
 func distro() string {

@@ -6,6 +6,7 @@ import { ArchiveRestore, Eye, FileDiff, Laptop, Loader2, RefreshCw, Search, Term
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
+import { remember, usePageState } from '@/lib/page-state'
 import { ago, formatBytes, timestamp } from '@/lib/format'
 import type { Side, TrashItem } from '@/lib/types'
 import { api } from '@/api/client'
@@ -32,10 +33,13 @@ export function Trash({ initialQuery, initialFolder }: { initialQuery?: string; 
   const { t } = useTranslation()
   const qc = useQueryClient()
   const { folders, connections, bindings } = useData()
-  const [q, setQ] = useState(initialQuery ?? '')
-  const [folder, setFolder] = useState(initialFolder ?? 'all')
-  const [open, setOpen] = useState<string>()
-  const [selected, setSelected] = useState<string[]>([]) // version keys, at most 2
+  // A link (from the browser) sets the search; otherwise the page is as it was left.
+  if (initialQuery !== undefined) remember('trash/q', initialQuery)
+  if (initialFolder !== undefined) remember('trash/folder', initialFolder)
+  const [q, setQ] = usePageState('trash/q', '')
+  const [folder, setFolder] = usePageState('trash/folder', 'all')
+  const [open, setOpen] = usePageState<string | undefined>('trash/open', undefined)
+  const [selected, setSelected] = usePageState<string[]>('trash/selected', []) // version keys, at most 2
   const [viewing, setViewing] = useState<Version[]>()
   const [restoring, setRestoring] = useState<TrashItem>()
   const [busy, setBusy] = useState(false)

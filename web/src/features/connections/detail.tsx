@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useDeferredValue, useMemo, useState } from 'react'
 import { Link, useNavigate } from '@tanstack/react-router'
 import {
   Ban,
@@ -19,6 +19,7 @@ import {
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
+import { usePageState } from '@/lib/page-state'
 import { ago, formatCount } from '@/lib/format'
 import { annotate, type AnnotatedNode } from '@/lib/status'
 import type { Binding, Connection, ItemStatus, SyncFolder } from '@/lib/types'
@@ -57,7 +58,7 @@ export function ConnectionDetail({ connectionId }: { connectionId: string }) {
   const navigate = useNavigate()
   const conn = connections.find((c) => c.id === connectionId)
   const bs = bindings.filter((b) => b.connectionId === connectionId)
-  const [active, setActive] = useState(bs[0]?.id)
+  const [active, setActive] = usePageState<string | undefined>(`conn/${connectionId}/tab`, () => bs[0]?.id)
   const [revoke, setRevoke] = useState(false)
 
   if (!conn) return <div className='p-10'>{t('common.unknownConnection')}</div>
@@ -184,6 +185,12 @@ const filterable: ItemStatus[] = [
   'private-both',
 ]
 
+// Annotated trees, kept while their tree data is (React Query keeps an
+// unchanged tree as the same object): coming back to a page doesn't redo
+// the work. One entry per tree, for the rules and conflicts it was made with.
+const annotated = new WeakMap<object, { key: string; value: ReturnType<typeof annotate> }>()
+const emptyTree = annotate([], [], [], new Set())
+
 export function useBindingTree(binding: Binding, folder: SyncFolder, conn: Connection) {
   const { conflicts } = useData()
   const { data: tree } = useTree(binding.folderId, binding.connectionId)
@@ -192,11 +199,22 @@ export function useBindingTree(binding: Binding, folder: SyncFolder, conn: Conne
     .filter((c) => c.connectionId === conn.id && c.folderId === folder.id)
     .map((c) => c.path)
     .join('\n')
-  const conflictPaths = useMemo(() => new Set(pathsKey ? pathsKey.split('\n') : []), [pathsKey])
-  return useMemo(
-    () => annotate(tree ?? [], folder.rules, folder.autoExcluded, conflictPaths),
-    [tree, folder.rules, folder.autoExcluded, conflictPaths]
-  )
+  const key = JSON.stringify([folder.rules, folder.autoExcluded, pathsKey])
+  const cached = tree ? annotated.get(tree) : undefined
+  // A tree not prepared yet is prepared after the page has been drawn (with
+  // a loading state), not while the old page is still on screen.
+  const shown = useDeferredValue(tree, cached?.key === key ? tree : undefined)
+  const value = useMemo(() => {
+    if (!shown) return emptyTree
+    const hit = annotated.get(shown)
+    if (hit?.key === key) return hit.value
+    const v = annotate(shown, folder.rules, folder.autoExcluded, new Set(pathsKey ? pathsKey.split('\n') : []))
+    annotated.set(shown, { key, value: v })
+    return v
+    // key covers folder.rules, folder.autoExcluded and pathsKey.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shown, key])
+  return { ...value, loading: !shown || shown !== tree }
 }
 
 /** Finds the current version of a node after the tree was rebuilt. */
@@ -210,9 +228,9 @@ export function findNode(nodes: AnnotatedNode[], path: string): AnnotatedNode | 
 
 function BindingView({ binding, folder, conn }: { binding: Binding; folder: SyncFolder; conn: Connection }) {
   const { t } = useTranslation()
-  const [query, setQuery] = useState('')
-  const [statuses, setStatuses] = useState<Set<ItemStatus>>(new Set())
-  const [selected, setSelected] = useState<string>()
+  const [query, setQuery] = usePageState(`conn/${binding.id}/query`, '')
+  const [statuses, setStatuses] = usePageState<Set<ItemStatus>>(`conn/${binding.id}/statuses`, () => new Set())
+  const [selected, setSelected] = usePageState<string | undefined>(`conn/${binding.id}/selected`, undefined)
   const { nodes, totals } = useBindingTree(binding, folder, conn)
   const { actions, dialog } = useItemActions(folder, conn)
   const current = selected ? findNode(nodes, selected) : undefined

@@ -138,6 +138,7 @@ func (s *Server) PanelHandler() http.Handler {
 	mux.HandleFunc("PUT /api/folders/{id}/rules", authed(s.apiRules))
 	mux.HandleFunc("POST /api/folders/{id}/exclusions", authed(s.apiExclusions))
 	mux.HandleFunc("PUT /api/folders/{id}/options", authed(s.apiFolderOptions))
+	mux.HandleFunc("PUT /api/folders/{id}/hidden", authed(s.apiHidden))
 	mux.HandleFunc("POST /api/conflicts/resolve", authed(s.apiResolve))
 	mux.HandleFunc("POST /api/delete", authed(s.apiDelete))
 	mux.HandleFunc("GET /api/connections/{id}/dirs", authed(s.apiDirs))
@@ -155,6 +156,8 @@ func (s *Server) PanelHandler() http.Handler {
 	mux.HandleFunc("GET /api/settings", authed(s.apiSettings))
 	mux.HandleFunc("PUT /api/settings", authed(s.apiSaveSettings))
 	mux.HandleFunc("POST /api/token", authed(s.apiNewToken))
+	mux.HandleFunc("GET /api/update", authed(s.apiUpdate))
+	mux.HandleFunc("POST /api/update", authed(s.apiUpgrade))
 	mux.HandleFunc("GET /api/windirs", authed(s.apiWinDirs))
 	mux.HandleFunc("POST /api/folders", authed(s.apiAddFolder))
 	mux.HandleFunc("POST /api/connections/{id}/bindings", authed(s.apiBind))
@@ -407,16 +410,17 @@ func (s *Server) apiOverview(w http.ResponseWriter, _ *http.Request) {
 		DetectedAt   time.Time    `json:"detectedAt"`
 	}
 	type folderOut struct {
-		ID             string           `json:"id"`
-		Name           string           `json:"name"`
-		WinPath        string           `json:"winPath"`
-		Rules          []string         `json:"rules"`
-		AutoExcluded   []panelExclusion `json:"autoExcluded"`
-		FileCount      int              `json:"fileCount"`
-		TotalBytes     int64            `json:"totalBytes"`
-		State          string           `json:"state"`
-		ConflictPolicy string           `json:"conflictPolicy"`
-		Paused         bool             `json:"paused"` // this folder itself (state is also "paused" under Pause all)
+		ID             string              `json:"id"`
+		Name           string              `json:"name"`
+		WinPath        string              `json:"winPath"`
+		Rules          []string            `json:"rules"`
+		AutoExcluded   []panelExclusion    `json:"autoExcluded"`
+		FileCount      int                 `json:"fileCount"`
+		TotalBytes     int64               `json:"totalBytes"`
+		State          string              `json:"state"`
+		ConflictPolicy string              `json:"conflictPolicy"`
+		Paused         bool                `json:"paused"` // this folder itself (state is also "paused" under Pause all)
+		Hidden         map[string][]string `json:"hidden"` // not shown in the file browser, by side
 	}
 	type bindingOut struct {
 		ID           string    `json:"id"`
@@ -478,7 +482,7 @@ func (s *Server) apiOverview(w http.ResponseWriter, _ *http.Request) {
 			state = "paused"
 		}
 		name := f.displayName()
-		folders = append(folders, folderOut{id, name, f.side.Root, rulesSrc, f.exclusions(s.reg.name), files, bytes, state, policy, paused})
+		folders = append(folders, folderOut{id, name, f.side.Root, rulesSrc, f.exclusions(s.reg.name), files, bytes, state, policy, paused, s.hiddenOf(id)})
 		for _, d := range devs {
 			for _, b := range d.Bindings {
 				if b.Folder != id {
@@ -1170,6 +1174,94 @@ func (s *Server) apiPause(w http.ResponseWriter, r *http.Request) {
 		s.SetPauseAll(true, time.Now().Add(time.Duration(req.Minutes)*time.Minute), false)
 	default:
 		writeErr(w, http.StatusBadRequest, errors.New("minutes must be 1 to 10080, -1 (until resumed) or 0 (resume)"))
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// hiddenOf returns a folder's hidden paths (never nil, for the panel).
+func (s *Server) hiddenOf(id string) map[string][]string {
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+	out := map[string][]string{}
+	for _, fc := range s.cfg.Folders {
+		if fc.ID == id {
+			for k, v := range fc.Hidden {
+				out[k] = append([]string{}, v...)
+			}
+		}
+	}
+	return out
+}
+
+// apiHidden hides paths from the file browser on one side, or shows them
+// again. Nothing else changes: it is only what the browser lists.
+func (s *Server) apiHidden(w http.ResponseWriter, r *http.Request) {
+	f := s.folderParam(w, r.PathValue("id"))
+	if f == nil {
+		return
+	}
+	var req struct {
+		Side       string   `json:"side"`
+		Connection string   `json:"connection"`
+		Paths      []string `json:"paths"`
+		Hidden     bool     `json:"hidden"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	key := "windows"
+	switch req.Side {
+	case "windows":
+	case "wsl":
+		if req.Connection == "" {
+			writeErr(w, http.StatusBadRequest, errors.New("wsl needs a connection"))
+			return
+		}
+		key = "wsl:" + req.Connection
+	default:
+		writeErr(w, http.StatusBadRequest, errors.New("side must be windows or wsl"))
+		return
+	}
+	for _, p := range req.Paths {
+		if err := fsx.CheckRel(p); err != nil {
+			writeErr(w, http.StatusBadRequest, err)
+			return
+		}
+	}
+	err := s.updateConfig(func(c *Config) {
+		for i := range c.Folders {
+			if c.Folders[i].ID != f.id {
+				continue
+			}
+			set := map[string]bool{}
+			for _, p := range c.Folders[i].Hidden[key] {
+				set[p] = true
+			}
+			for _, p := range req.Paths {
+				if req.Hidden {
+					set[p] = true
+				} else {
+					delete(set, p)
+				}
+			}
+			list := make([]string, 0, len(set))
+			for p := range set {
+				list = append(list, p)
+			}
+			sort.Strings(list)
+			if c.Folders[i].Hidden == nil {
+				c.Folders[i].Hidden = map[string][]string{}
+			}
+			if len(list) == 0 {
+				delete(c.Folders[i].Hidden, key)
+			} else {
+				c.Folders[i].Hidden[key] = list
+			}
+		}
+	})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

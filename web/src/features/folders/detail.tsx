@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import i18n, { tx } from '@/i18n'
 import { cn } from '@/lib/utils'
+import { usePageState } from '@/lib/page-state'
 import { ago, formatBytes, formatCount } from '@/lib/format'
 import { previewMatches } from '@/lib/status'
 import type { SyncFolder } from '@/lib/types'
@@ -20,7 +21,7 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { CodeEditor } from '@/components/monaco'
+import { CodeEditor } from '@/components/code-editor'
 import { PageShell } from '@/components/page-shell'
 import { OnlineDot, SyncState } from '@/components/status'
 
@@ -28,6 +29,7 @@ export function FolderDetail({ folderId }: { folderId: string }) {
   const { t } = useTranslation()
   const { folders, conflicts } = useData()
   const folder = folders.find((f) => f.id === folderId)
+  const [tab, setTab] = usePageState(`folder/${folderId}/tab`, 'rules')
   if (!folder) return <div className='p-10'>{t('common.unknownFolder')}</div>
   const kc = conflicts.filter((c) => c.folderId === folder.id).length
 
@@ -57,7 +59,7 @@ export function FolderDetail({ folderId }: { folderId: string }) {
         </span>
       }
     >
-      <Tabs defaultValue='rules' className='gap-4'>
+      <Tabs value={tab} onValueChange={setTab} className='gap-4'>
         <TabsList>
           <TabsTrigger value='rules'>{t('folder.tabRules')}</TabsTrigger>
           <TabsTrigger value='excluded'>

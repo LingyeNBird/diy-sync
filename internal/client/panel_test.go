@@ -631,3 +631,76 @@ func TestOpenInVSCodeChecks(t *testing.T) {
 		}
 	}
 }
+
+func TestHiddenInBrowser(t *testing.T) {
+	e := newEnv(t, "a/")
+	p := newPanel(t, e)
+	p.login()
+	put(t, e.win, "a/x.txt", "x")
+	hide := func(side, conn string, paths []string, on bool) int {
+		code, _, _ := p.call("PUT", "/api/folders/proj/hidden", map[string]any{"side": side, "connection": conn, "paths": paths, "hidden": on}, nil)
+		return code
+	}
+	if c := hide("windows", "", []string{"a/x.txt", "b"}, true); c != 204 {
+		t.Fatalf("hide: %d", c)
+	}
+	if c := hide("wsl", "c1", []string{"d"}, true); c != 204 {
+		t.Fatalf("hide wsl: %d", c)
+	}
+	hide("windows", "", []string{"b"}, false)
+	if hide("windows", "", []string{"../x"}, true) != 400 || hide("wsl", "", []string{"d"}, true) != 400 {
+		t.Fatal("bad requests accepted")
+	}
+	var ov struct {
+		Folders []struct {
+			ID     string
+			Hidden map[string][]string
+		}
+	}
+	p.call("GET", "/api/overview", nil, &ov)
+	h := ov.Folders[0].Hidden
+	if len(h["windows"]) != 1 || h["windows"][0] != "a/x.txt" || len(h["wsl:c1"]) != 1 {
+		t.Fatalf("hidden = %v", h)
+	}
+	// Only a view: the file still syncs.
+	c := e.client()
+	c.sync()
+	e.want(c.root, "a/x.txt", "x")
+}
+
+// A conflict on a path that stops syncing (excluded, or sync cancelled) is dropped.
+func TestConflictLeavesWithTheScope(t *testing.T) {
+	e := newEnv(t, "a/")
+	p := newPanel(t, e)
+	p.login()
+	c := e.client()
+	for _, f := range []string{"a/x.txt", "a/y.txt"} {
+		put(t, e.win, f, "base")
+	}
+	c.sync()
+	for _, f := range []string{"a/x.txt", "a/y.txt"} {
+		put(t, e.win, f, "windows edit")
+		put(t, c.root, f, "wsl edit")
+	}
+	c.sync()
+	if n := len(e.conflicts()); n != 2 {
+		t.Fatalf("%d conflicts, want 2", n)
+	}
+	p.call("POST", "/api/folders/proj/exclusions", map[string]any{"paths": []string{"a/x.txt"}}, nil)
+	if cs := e.conflicts(); len(cs) != 1 || cs[0].Path != "a/y.txt" {
+		t.Fatalf("after excluding x: %+v", cs)
+	}
+	p.call("PUT", "/api/folders/proj/rules", map[string]any{"rules": []string{"a/", "!a/y.txt"}}, nil)
+	if n := len(e.conflicts()); n != 0 {
+		t.Fatalf("after cancelling y: %d conflicts", n)
+	}
+	// Both sides kept their own versions.
+	e.want(e.win, "a/x.txt", "windows edit")
+	e.want(c.root, "a/x.txt", "wsl edit")
+	// Back in scope with different content: the conflict comes back.
+	p.call("PUT", "/api/folders/proj/rules", map[string]any{"rules": []string{"a/"}}, nil)
+	c.sync()
+	if cs := e.conflicts(); len(cs) != 1 || cs[0].Path != "a/y.txt" {
+		t.Fatalf("y back in scope: %+v", cs)
+	}
+}

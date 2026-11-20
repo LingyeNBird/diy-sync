@@ -30,6 +30,46 @@ pause, "pause all" for a while, a trash page (search, compare versions,
 restore), log files capped at 2 × 5 MB. On Windows the server runs in the
 background with a tray icon and can start at login.
 
+## Install
+
+In WSL (puts `fdsync` in `~/.local/bin` and adds that folder to `PATH` in `~/.bashrc`):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/__GITHUB_REPO__/HEAD/install.sh | bash
+```
+
+Run it again to update. `FDSYNC_VERSION=1.2.3` installs a given version and
+`FDSYNC_BIN_DIR=DIR` picks another folder, e.g.
+`curl -fsSL …/install.sh | FDSYNC_VERSION=1.2.3 bash`.
+
+On Windows, download `fdsync-server-windows-amd64.exe` from the
+[releases](https://github.com/__GITHUB_REPO__/releases) and run it. After that,
+the panel's Settings → Check for updates finds new versions; Upgrade downloads
+one, checks its checksum, swaps the exe and restarts it.
+
+## Release
+
+Actions → **Build and release** → Run workflow: give the version as `1.2.3`
+(no `v`). With "Publish a GitHub release" off it only builds (the files are
+the run's artifact); on, it also tags the built commit `v1.2.3`, pushes
+the tag, and creates the release with notes, the commits since the previous
+release (or since the first commit) and a Full Changelog link.
+
+- The release or the tag (at another commit) already exists: the run stops
+  before building. A tag already at the built commit is reused (a re-run).
+- The tag push fails: tried 3 times, then the run stops without a release.
+- The release fails after the tag was pushed: the tag (and a half-made
+  draft) is deleted again, so the run can simply be repeated.
+
+- "Previous release" and "Latest" go by version, not date: 1.4.3 after
+  2.0.0 lists the changes since 1.4.2 and doesn't become Latest (which the
+  upgrade check and `install.sh` download).
+
+The tag logic is `.github/scripts/tag.sh`, the notes `.github/scripts/notes.sh`.
+The upgrade check and `install.sh` read the releases without a token, so they
+need a public repository. Files: `fdsync-server-windows-{amd64,arm64}.exe`,
+`fdsync-server-linux-amd64`, `fdsync-linux-{amd64,arm64}`, `SHA256SUMS`.
+
 ## Build
 
 ```sh

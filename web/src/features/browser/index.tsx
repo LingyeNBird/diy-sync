@@ -1,5 +1,7 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
+import { remember, remembered, usePageState } from '@/lib/page-state'
+import { preloadEditor } from '@/components/code-editor'
 import {
   Ban,
   ChevronsDownUp,
@@ -8,6 +10,7 @@ import {
   Columns2,
   Crosshair,
   Eye,
+  EyeOff,
   FileDiff,
   FolderOpen,
   GitCompareArrows,
@@ -62,10 +65,18 @@ export function Browser({ connectionId, bindingId }: { connectionId?: string; bi
   const { t } = useTranslation()
   const navigate = useNavigate()
   const { connections, folders, bindings } = useData()
-  const conn = connections.find((c) => c.id === connectionId) ?? connections[0]
+  // Opened without a choice (e.g. from the sidebar): the project shown last.
+  const last = remembered<{ connection?: string; binding?: string }>('browser/last')
+  const wantConn = connectionId ?? last?.connection
+  const wantBinding = connectionId ? bindingId : (bindingId ?? last?.binding)
+  const conn = connections.find((c) => c.id === wantConn) ?? connections[0]
   const bs = bindings.filter((b) => b.connectionId === conn?.id)
-  const binding = bs.find((b) => b.id === bindingId) ?? bs[0]
+  const binding = bs.find((b) => b.id === wantBinding) ?? bs[0]
   const go = (connection: string, b?: string) => navigate({ to: '/browse', search: { connection, binding: b } })
+  useEffect(() => {
+    if (conn && binding) remember('browser/last', { connection: conn.id, binding: binding.id })
+  }, [conn, binding])
+  useEffect(preloadEditor, []) // the viewer needs it; fetch it once the page is idle
 
   if (!conn)
     return (
@@ -140,32 +151,52 @@ function BrowserView({ conn, binding, folder }: { conn: Connection; binding: Bin
   const { t } = useTranslation()
   const navigate = useNavigate()
   const { conflicts } = useData()
-  const { nodes, totals } = useBindingTree(binding, folder, conn)
+  const { nodes, totals, loading } = useBindingTree(binding, folder, conn)
   const { actions, dialog } = useItemActions(folder, conn)
 
-  const [query, setQuery] = useState('')
-  const [onlyDiff, setOnlyDiff] = useState(false)
-  const [align, setAlign] = useState(false)
-  const [link, setLink] = useState(true)
-  const [active, setActive] = useState<Side>('windows')
-  const [expanded, setExpanded] = useState<Record<Side, Set<string>>>({ windows: new Set(), wsl: new Set() })
-  const [sel, setSel] = useState<Record<Side, Sel>>({ windows: emptySel(), wsl: emptySel() })
+  // Remembered per binding: each project comes back as it was left.
+  const k = (name: string) => `browser/${binding.id}/${name}`
+  const [query, setQuery] = usePageState(k('query'), '')
+  const [onlyDiff, setOnlyDiff] = usePageState(k('onlyDiff'), false)
+  const [align, setAlign] = usePageState(k('align'), false)
+  const [link, setLink] = usePageState(k('link'), true)
+  const [active, setActive] = usePageState<Side>(k('active'), 'windows')
+  const [expanded, setExpanded] = usePageState<Record<Side, Set<string>>>(k('expanded'), () => ({ windows: new Set(), wsl: new Set() }))
+  const [sel, setSel] = usePageState<Record<Side, Sel>>(k('sel'), () => ({ windows: emptySel(), wsl: emptySel() }))
   const [reveal, setReveal] = useState<Partial<Record<Side, { path: string; nonce: number }>>>({})
   const [scrollTop, setScrollTop] = useState<number>()
   const [props, setProps] = useState<string>()
-  const [viewer, setViewer] = useState<{ path: string; mode: ViewerMode }>()
+  const [viewer, setViewer] = usePageState<{ path: string; mode: ViewerMode } | undefined>(k('viewer'), undefined)
+
+  // Hidden from this browser (a view setting kept on the server), and whether each side shows them anyway.
+  const [showHidden, setShowHidden] = usePageState<Record<Side, boolean>>(k('showHidden'), () => ({ windows: false, wsl: false }))
+  const winHidden = folder.hidden.windows
+  const wslHidden = folder.hidden[`wsl:${conn.id}`]
+  const hidden = useMemo(() => ({ windows: new Set(winHidden ?? []), wsl: new Set(wslHidden ?? []) }), [winHidden, wslHidden])
+  const { setHidden } = useData()
+  const hide = (side: Side, nodes: AnnotatedNode[], on: boolean) => {
+    if (!nodes.length) return
+    void setHidden(folder.id, side, conn.id, nodes.map((n) => n.path), on).then(() => {
+      if (on) setSel((s) => ({ ...s, [side]: emptySel() }))
+      toast.success(
+        on
+          ? t('browser.hiddenToast', { count: nodes.length, side: side === 'windows' ? t('common.windows') : conn.name })
+          : t('browser.unhiddenToast', { count: nodes.length })
+      )
+    })
+  }
 
   // In compare layout both panes always share expansion so rows line up.
   const linked = link || align
   const rows = useMemo(() => {
-    const opts = { query, onlyDiff, align }
+    const opts = { query, onlyDiff, align, hidden, showHidden }
     const winExp = align ? expanded.windows : expanded.windows
     const wslExp = align ? expanded.windows : expanded.wsl
     return {
       windows: buildRows(nodes, { ...opts, side: 'windows', expanded: winExp }),
       wsl: buildRows(nodes, { ...opts, side: 'wsl', expanded: wslExp }),
     }
-  }, [nodes, expanded, query, onlyDiff, align])
+  }, [nodes, expanded, query, onlyDiff, align, hidden, showHidden])
 
   const toggle = useCallback(
     (side: Side, path: string, force?: boolean) =>
@@ -179,7 +210,7 @@ function BrowserView({ conn, binding, folder }: { conn: Connection; binding: Bin
         }
         return linked ? { windows: apply(e.windows), wsl: apply(e.wsl) } : { ...e, [side]: apply(e[side]) }
       }),
-    [linked]
+    [linked, setExpanded]
   )
 
   /** Makes a path visible (and selected) in a pane: opens its folders, scrolls to it. */
@@ -315,6 +346,8 @@ function BrowserView({ conn, binding, folder }: { conn: Connection; binding: Bin
       onOpen={(n, mode) => open(side, n, mode)}
       onResolve={(p) => navigate({ to: '/conflicts', search: { path: p } })}
       onProps={setProps}
+      isHidden={(n) => rows[side].some((r) => r.node.path === n.path && r.hidden)}
+      onHide={(nodes, on) => hide(side, nodes, on)}
       onShowRule={() => navigate({ to: '/folders/$folderId', params: { folderId: folder.id } })}
     />
   )
@@ -332,6 +365,11 @@ function BrowserView({ conn, binding, folder }: { conn: Connection; binding: Bin
       reveal={reveal[side]}
       scrollTop={align ? scrollTop : undefined}
       onScroll={align ? setScrollTop : undefined}
+      memoryKey={k(`scroll/${side}`)}
+      loading={loading && nodes.length === 0}
+      hiddenCount={hidden[side].size}
+      showHidden={showHidden[side]}
+      onToggleHidden={() => setShowHidden((h) => ({ ...h, [side]: !h[side] }))}
       onActivate={() => setActive(side)}
       onRowClick={(e, i) => onRowClick(side, e, i)}
       onRowContext={(i) => onRowContext(side, i)}
@@ -450,6 +488,8 @@ function PaneMenu({
   onResolve,
   onProps,
   onShowRule,
+  isHidden,
+  onHide,
 }: {
   side: Side
   targets: AnnotatedNode[]
@@ -464,6 +504,8 @@ function PaneMenu({
   onResolve: (path: string) => void
   onProps: (path: string) => void
   onShowRule: () => void
+  isHidden: (n: AnnotatedNode) => boolean
+  onHide: (nodes: AnnotatedNode[], hidden: boolean) => void
 }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -595,6 +637,16 @@ function PaneMenu({
       {single?.kind === 'dir' && (
         <ContextMenuItem onSelect={() => rescanFolder(folder.id, single.path)}>
           <RefreshCw /> {t('browser.menu.rescanFolder')}
+        </ContextMenuItem>
+      )}
+      {any((n) => !isHidden(n)) && (
+        <ContextMenuItem onSelect={() => onHide(targets.filter((n) => !isHidden(n)), true)}>
+          <EyeOff /> {t('browser.menu.hide')}
+        </ContextMenuItem>
+      )}
+      {any(isHidden) && (
+        <ContextMenuItem onSelect={() => onHide(targets.filter(isHidden), false)}>
+          <Eye /> {t('browser.menu.unhide')}
         </ContextMenuItem>
       )}
       {single && (

@@ -6,7 +6,7 @@ import { ChevronFirst, ChevronLast, ChevronLeft, ChevronRight } from 'lucide-rea
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 import { formatBytes } from '@/lib/format'
-import { CodeDiff, CodeEditor } from '@/components/monaco'
+import { CodeDiff, CodeEditor } from '@/components/code-editor'
 
 export const checkerboard =
   'bg-[conic-gradient(var(--muted)_25%,transparent_0_50%,var(--muted)_0_75%,transparent_0)] bg-[length:16px_16px]'

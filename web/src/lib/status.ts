@@ -39,13 +39,26 @@ export function annotate(
   const rules = compileRules(ruleLines)
   const excl = new Map(exclusions.map((e) => [e.path, e]))
 
-  function visit(n: TreeNode, parentExcluded?: AutoExclusion): AnnotatedNode {
+  // The deciding rule is the last one matching the path or a parent folder
+  // (see decidingRule). A folder passes down the last rule matching it or
+  // its parents, so each item only tests its own path: O(items × rules)
+  // instead of O(items × depth × rules) with the path rebuilt per level.
+  const decide = (path: string, isDir: boolean, fromParent: number) => {
+    for (let i = rules.length - 1; i > fromParent; i--) {
+      const r = rules[i]
+      if ((!r.dirOnly || isDir) && r.re.test(path)) return i
+    }
+    return fromParent
+  }
+
+  function visit(n: TreeNode, parentExcluded: AutoExclusion | undefined, parentRule: number): AnnotatedNode {
     const exclusion = excl.get(n.path) ?? parentExcluded
-    const rule = decidingRule(rules, n.path, n.kind === 'dir')
+    const ri = decide(n.path, n.kind === 'dir', parentRule)
+    const rule = ri >= 0 ? rules[ri] : undefined
     const scoped = !!rule && !rule.negate
 
     if (n.kind === 'dir' && n.children) {
-      const children = n.children.map((c) => visit(c, exclusion))
+      const children = n.children.map((c) => visit(c, exclusion, ri))
       const counts = zero()
       children.forEach((c) => add(counts, c.counts))
       let status: ItemStatus
@@ -82,7 +95,7 @@ export function annotate(
     return { ...rest, status, rule, exclusion, counts }
   }
 
-  const nodes = roots.map((r) => visit(r))
+  const nodes = roots.map((r) => visit(r, undefined, -1))
   const totals = zero()
   nodes.forEach((n) => add(totals, n.counts))
   return { nodes, totals }

@@ -3,6 +3,7 @@ import { ArrowLeftRight, CheckCircle2, Copy, Loader2, TriangleAlert, FileWarning
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
+import { remember, usePageState } from '@/lib/page-state'
 import { ago, formatBytes, timestamp } from '@/lib/format'
 import type { Conflict, ConflictVersion, Side } from '@/lib/types'
 import { useQuery } from '@tanstack/react-query'
@@ -19,10 +20,11 @@ import { PageShell } from '@/components/page-shell'
 export function Conflicts({ initialPath }: { initialPath?: string }) {
   const { t } = useTranslation()
   const { conflicts, connections, folders, resolve } = useData()
-  const [activeId, setActiveId] = useState<string | undefined>(
-    (initialPath && conflicts.find((c) => c.path === initialPath)?.id) || conflicts[0]?.id
-  )
-  const [checked, setChecked] = useState<Set<string>>(new Set())
+  // Opened for a path (from the browser): show that one; else the one shown last.
+  const wanted = initialPath && conflicts.find((c) => c.path === initialPath)?.id
+  if (wanted) remember('conflicts/active', wanted)
+  const [activeId, setActiveId] = usePageState<string | undefined>('conflicts/active', () => conflicts[0]?.id)
+  const [checked, setChecked] = usePageState<Set<string>>('conflicts/checked', () => new Set())
   const active = conflicts.find((c) => c.id === activeId) ?? conflicts[0]
   const connName = (id: string) => connections.find((c) => c.id === id)?.name ?? id
 
@@ -152,9 +154,9 @@ function ConflictView({
   const ext = c.path.includes('.') ? c.path.slice(c.path.lastIndexOf('.')) : ''
   const base = c.path.slice(0, c.path.length - ext.length)
   // Diff direction: the other side is shown relative to baseSide.
-  const [baseSide, setBaseSide] = useState<Side>('windows')
-  const [inline, setInline] = useState(false)
-  const [imageMode, setImageMode] = useState<ImageMode>('side')
+  const [baseSide, setBaseSide] = usePageState<Side>('conflicts/base', 'windows')
+  const [inline, setInline] = usePageState('conflicts/inline', false)
+  const [imageMode, setImageMode] = usePageState<ImageMode>('conflicts/imageMode', 'side')
   const cmpSide: Side = baseSide === 'windows' ? 'wsl' : 'windows'
   const name = (s: Side) => (s === 'windows' ? t('common.windows') : wslName)
   const ver = (s: Side) => (s === 'windows' ? c.win : c.wsl)

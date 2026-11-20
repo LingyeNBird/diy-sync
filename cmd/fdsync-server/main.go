@@ -20,12 +20,15 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/term"
 
 	"fdsync/internal/logfile"
 	"fdsync/internal/server"
+	"fdsync/internal/update"
 )
 
 const usage = `fdsync-server: the Windows side of fdsync.
@@ -37,6 +40,7 @@ Usage:
   fdsync-server [flags] set-rules ID [RULE...]  replace a folder's scope rules
   fdsync-server [flags] show-config             print the config file location and contents
   fdsync-server [flags] set-password            set the panel password (asks for it)
+  fdsync-server version                         print the version
 
 Flags:
 `
@@ -51,6 +55,10 @@ func main() {
 	noTray := flag.Bool("no-tray", false, "no tray icon (Windows): run until stopped with Ctrl+C")
 	flag.Usage = func() { fmt.Fprint(os.Stderr, usage); flag.PrintDefaults() }
 	flag.Parse()
+	if a := flag.Args(); len(a) == 1 && a[0] == "version" {
+		fmt.Println("fdsync-server", update.Version)
+		return
+	}
 
 	level := slog.LevelInfo
 	if *verbose {
@@ -185,15 +193,23 @@ func main() {
 	if auto != nil {
 		cfg.Autostart = auto
 	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	// An upgrade from the panel: stop, then start the new exe (same path, same flags).
+	var restart atomic.Bool
+	cfg.Restart = func() {
+		restart.Store(true)
+		stop()
+	}
 	srv, err := server.New(cfg, log)
 	if err != nil {
 		fatal(err)
 	}
-	defer srv.Close()
+	closeSrv := sync.OnceValue(srv.Close)
+	defer closeSrv()
+	go update.Cleanup() // the previous exe, if this start follows an upgrade
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
-	log.Info("starting", "device", srv.Device(), "data", *dataDir)
+	log.Info("starting", "version", update.Version, "device", srv.Device(), "data", *dataDir)
 	if *openPanel || cfg.PasswordHash == "" { // first start: the panel asks for a password
 		go func() {
 			time.Sleep(time.Second) // let the listener come up
@@ -211,6 +227,24 @@ func main() {
 	if runErr != nil {
 		fatal(runErr)
 	}
+	if restart.Load() {
+		_ = closeSrv() // the new process opens the same indexes
+		if err := relaunch(); err != nil {
+			log.Error("restart after upgrade", "err", err)
+			showError("fdsync-server", "The upgrade was installed, but starting it failed: "+err.Error()+"\nStart fdsync-server again.")
+			return
+		}
+		log.Info("restarting with the new version")
+	}
+}
+
+// relaunch starts this exe (by now the upgraded file) with the same arguments.
+func relaunch() error {
+	exe, err := update.Executable()
+	if err != nil {
+		return err
+	}
+	return exec.Command(exe, os.Args[1:]...).Start()
 }
 
 // alreadyRunning reports whether an fdsync panel answers at addr.

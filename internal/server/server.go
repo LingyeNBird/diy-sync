@@ -40,6 +40,9 @@ type FolderConfig struct {
 	ConflictPolicy string `json:"conflictPolicy,omitempty"`
 	Paused         bool   `json:"paused,omitempty"`
 	Name           string `json:"name,omitempty"` // display name in the panel; "" = the ID
+	// Hidden: paths the panel's file browser doesn't show (a view setting
+	// only, sync ignores it), by side: "windows" or "wsl:<connection>".
+	Hidden map[string][]string `json:"hidden,omitempty"`
 }
 
 // Config is the server configuration (config.json in the data directory).
@@ -63,7 +66,10 @@ type Config struct {
 
 	// Not stored in the file.
 	// Autostart starts the server at Windows login (nil = not supported here).
-	Autostart    Autostart     `json:"-"`
+	Autostart Autostart `json:"-"`
+	// Restart stops the server so main starts the (upgraded) exe again;
+	// nil = upgrading from the panel isn't possible.
+	Restart      func()        `json:"-"`
 	DataDir      string        `json:"-"`
 	ScanDelay    time.Duration `json:"-"` // watcher batching; default 1 s
 	RescanPeriod time.Duration `json:"-"` // full rescan; default 60 min
@@ -84,6 +90,7 @@ type Server struct {
 	reg     *registry
 	broker  *broker
 	panel   *panelAuth
+	upd     updates
 	pair    *pairing
 	cert    tls.Certificate
 	fp      string // certificate fingerprint, "" without TLS

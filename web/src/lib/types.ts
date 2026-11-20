@@ -44,6 +44,8 @@ export type SyncFolder = {
   conflictPolicy: 'ask' | 'newest-wins'
   /** Paused by itself (state is also 'paused' while everything is paused). */
   paused: boolean
+  /** Not shown in the file browser (view only), by side: "windows" or "wsl:<connection>". */
+  hidden: Record<string, string[]>
 }
 
 export type Binding = {

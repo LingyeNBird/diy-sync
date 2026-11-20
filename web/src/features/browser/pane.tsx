@@ -1,7 +1,9 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import {
   ChevronRight,
+  Eye,
+  EyeOff,
   File,
   FileCode2,
   FileImage,
@@ -10,10 +12,14 @@ import {
   FolderOpen,
   Laptop,
   Link2,
+  Loader2,
   Terminal,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
+import { remember, remembered } from '@/lib/page-state'
+import { Button } from '@/components/ui/button'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { ago, formatBytes } from '@/lib/format'
 import type { AnnotatedNode } from '@/lib/status'
 import type { Side } from '@/lib/types'
@@ -54,6 +60,14 @@ export type PaneProps = {
   reveal?: { path: string; nonce: number }
   scrollTop?: number
   onScroll?: (top: number) => void
+  /** Where this pane's scroll position is remembered (page memory). */
+  memoryKey?: string
+  /** The tree is still being fetched or prepared. */
+  loading?: boolean
+  /** Items hidden on this side; showHidden lists them anyway (dimmed). */
+  hiddenCount: number
+  showHidden: boolean
+  onToggleHidden: () => void
   onActivate: () => void
   onRowClick: (e: React.MouseEvent, index: number) => void
   onRowContext: (index: number) => void
@@ -87,6 +101,20 @@ export function Pane(p: PaneProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [p.reveal?.nonce, p.rows])
 
+  // Back to the remembered scroll position once the rows are there.
+  const restored = useRef<string>(undefined) // the memory key restored last (another binding: restore again)
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (restored.current === p.memoryKey || !el || !p.memoryKey || p.rows.length === 0) return
+    restored.current = p.memoryKey
+    const top = remembered<number>(p.memoryKey)
+    if (top) {
+      virtualizer.scrollToOffset(top)
+      el.scrollTop = top
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [p.rows.length, p.memoryKey])
+
   // Synchronized scrolling in compare layout.
   useEffect(() => {
     const el = ref.current
@@ -113,6 +141,23 @@ export function Pane(p: PaneProps) {
         <span className='shrink-0 text-xs text-muted-foreground tabular-nums'>
           {t('common.files', { count: p.total })}
         </span>
+        {p.hiddenCount > 0 && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant={p.showHidden ? 'secondary' : 'ghost'}
+                size='sm'
+                className='-my-1 h-6 gap-1 px-1.5 text-xs'
+                onClick={p.onToggleHidden}
+                aria-pressed={p.showHidden}
+              >
+                {p.showHidden ? <Eye className='size-3.5' /> : <EyeOff className='size-3.5' />}
+                {t('browser.hiddenCount', { count: p.hiddenCount })}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{p.showHidden ? t('browser.hideHidden') : t('browser.showHidden')}</TooltipContent>
+          </Tooltip>
+        )}
       </div>
       <div
         className={cn(
@@ -138,15 +183,24 @@ export function Pane(p: PaneProps) {
             aria-label={p.label}
             onKeyDown={p.onKey}
             onFocus={p.onActivate}
-            onScroll={(e) => p.onScroll?.(e.currentTarget.scrollTop)}
+            onScroll={(e) => {
+              const top = e.currentTarget.scrollTop
+              p.onScroll?.(top)
+              if (p.memoryKey && restored.current === p.memoryKey) remember(p.memoryKey, top)
+            }}
             className='min-h-0 flex-1 overflow-auto outline-none'
           >
-            {p.rows.length === 0 && (
-              <div className='p-10 text-center text-sm text-muted-foreground'>{t('tree.nothing')}</div>
-            )}
+            {p.rows.length === 0 &&
+              (p.loading ? (
+                <div className='flex items-center justify-center gap-2 p-10 text-sm text-muted-foreground'>
+                  <Loader2 className='size-4 animate-spin' /> {t('browser.loadingTree')}
+                </div>
+              ) : (
+                <div className='p-10 text-center text-sm text-muted-foreground'>{t('tree.nothing')}</div>
+              ))}
             <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
               {virtualizer.getVirtualItems().map((v) => {
-                const { node, depth, open, ghost } = p.rows[v.index]
+                const { node, depth, open, ghost, hidden } = p.rows[v.index]
                 const isDir = node.kind === 'dir'
                 const meta = p.side === 'windows' ? node.win : node.wsl
                 const sel = p.selected.has(node.path) && !ghost
@@ -193,7 +247,8 @@ export function Pane(p: PaneProps) {
                       <span className={cn(ghost && 'opacity-40')}>
                         <Icon node={node} open={open} />
                       </span>
-                      <span className={cn('truncate', ghost && 'italic')}>{node.name}</span>
+                      <span className={cn('truncate', ghost && 'italic', hidden && 'opacity-50')}>{node.name}</span>
+                      {hidden && <EyeOff className='size-3 shrink-0 text-muted-foreground' aria-label={t('browser.hiddenMark')} />}
                       {ghost && <span className='shrink-0 text-[11px]'>· {t('browser.missingHere')}</span>}
                     </div>
                     <div>{!ghost && <StatusBadge status={node.status} />}</div>

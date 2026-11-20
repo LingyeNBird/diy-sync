@@ -41,7 +41,7 @@ export const overviewQuery = {
   queryFn: async () => {
     const o = await api<Overview>('GET', '/api/overview')
     // Lists may come as null from older servers; pages expect arrays.
-    o.folders = (o.folders ?? []).map((f) => ({ ...f, rules: f.rules ?? [], autoExcluded: f.autoExcluded ?? [] }))
+    o.folders = (o.folders ?? []).map((f) => ({ ...f, rules: f.rules ?? [], autoExcluded: f.autoExcluded ?? [], hidden: f.hidden ?? {} }))
     o.connections ??= []
     o.bindings ??= []
     o.conflicts ??= []
@@ -110,6 +110,8 @@ export function useData() {
     },
     exclude: (folderId: string, paths: string[]) =>
       run(api('POST', `/api/folders/${encodeURIComponent(folderId)}/exclusions`, { paths })),
+    setHidden: (folderId: string, side: Side, connectionId: string, paths: string[], hidden: boolean) =>
+      run(api('PUT', `/api/folders/${encodeURIComponent(folderId)}/hidden`, { side, connection: connectionId, paths, hidden })),
     cancelExclusion: (folderId: string, paths: string[]) =>
       run(api('POST', `/api/folders/${encodeURIComponent(folderId)}/exclusions`, { paths, cancel: true })),
     resolve: (ids: string[], how: Resolution) => run(api('POST', '/api/conflicts/resolve', { ids, how })),

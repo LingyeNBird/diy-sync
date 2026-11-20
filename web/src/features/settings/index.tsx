@@ -1,12 +1,12 @@
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Copy, Eye, EyeOff, RefreshCw } from 'lucide-react'
+import { Copy, Download, ExternalLink, Eye, EyeOff, Loader2, RefreshCw } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
-import { formatBytes } from '@/lib/format'
+import { ago, formatBytes } from '@/lib/format'
 import { languages } from '@/i18n'
-import { api } from '@/api/client'
+import { api, getSession } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -71,6 +71,8 @@ export function Settings() {
             ))}
           </CardContent>
         </Card>
+
+        <Updates />
 
         {s?.autostart && (
           <Card id='startup'>
@@ -277,6 +279,135 @@ export function Settings() {
         <Diagnostics />
       </div>
     </PageShell>
+  )
+}
+
+type UpdateInfo = {
+  current: string
+  latest?: string
+  newer: boolean
+  url?: string
+  checkedAt?: string
+  error?: string
+  canUpgrade: boolean
+  installing: boolean
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+/**
+ * Waits for the restarted server to answer again, then reloads the panel.
+ * The server scans every folder before it listens, so allow a few minutes.
+ */
+async function waitForRestart(): Promise<boolean> {
+  await sleep(2000)
+  for (let i = 0; i < 180; i++) {
+    try {
+      await getSession()
+      return true
+    } catch {
+      await sleep(1000)
+    }
+  }
+  return false
+}
+
+function Updates() {
+  const { t } = useTranslation()
+  const qc = useQueryClient()
+  // The server asks GitHub at most once an hour; opening this page checks.
+  const { data: u, isFetching } = useQuery({
+    queryKey: ['update'],
+    queryFn: () => api<UpdateInfo>('GET', '/api/update'),
+    staleTime: 5 * 60_000,
+    refetchInterval: 60 * 60_000,
+  })
+  const [checking, setChecking] = useState(false)
+  const [confirm, setConfirm] = useState(false)
+  const [phase, setPhase] = useState<'idle' | 'installing' | 'restarting'>('idle')
+
+  const checkNow = () => {
+    setChecking(true)
+    api<UpdateInfo>('GET', '/api/update?refresh=1')
+      .then((r) => qc.setQueryData(['update'], r), failed(t))
+      .finally(() => setChecking(false))
+  }
+
+  const upgrade = () => {
+    setConfirm(false)
+    setPhase('installing')
+    api<{ version: string }>('POST', '/api/update').then(
+      async () => {
+        setPhase('restarting')
+        if (await waitForRestart()) window.location.reload()
+        else {
+          setPhase('idle')
+          toast.warning(t('settings.upgradeSlow'))
+        }
+      },
+      (e: Error) => {
+        setPhase('idle')
+        failed(t)(e)
+      }
+    )
+  }
+
+  const busy = phase !== 'idle' || !!u?.installing
+  return (
+    <Card id='updates'>
+      <CardHeader>
+        <CardTitle className='text-base'>{t('settings.updates')}</CardTitle>
+        <CardDescription>{t('settings.updatesDesc')}</CardDescription>
+      </CardHeader>
+      <CardContent className='space-y-3'>
+        <div className='grid gap-4 sm:grid-cols-2'>
+          <ReadOnly label={t('settings.currentVersion')} value={u?.current} />
+          <ReadOnly label={t('settings.latestVersion')} value={u ? (u.latest ?? '—') : undefined} />
+        </div>
+        <p className='text-sm'>
+          {!u || ((isFetching || checking) && !u.checkedAt) ? (
+            <span className='text-muted-foreground'>{t('settings.checking')}</span>
+          ) : u.error ? (
+            <span className='text-destructive'>{u.error}</span>
+          ) : u.newer ? (
+            <span className='font-medium'>
+              {t('settings.newVersion', { version: u.latest })} {!u.canUpgrade && <span className='text-muted-foreground'>{t('settings.noAsset')}</span>}
+            </span>
+          ) : (
+            <span className='text-muted-foreground'>{t('settings.upToDate')}</span>
+          )}
+          {u?.url && (
+            <a href={u.url} target='_blank' rel='noreferrer' className='ms-3 inline-flex items-center gap-1 text-sm underline-offset-4 hover:underline'>
+              {t('settings.releaseNotes')} <ExternalLink className='size-3.5' />
+            </a>
+          )}
+        </p>
+        {u?.checkedAt && <p className='text-xs text-muted-foreground'>{t('settings.checkedAgo', { when: ago(u.checkedAt) })}</p>}
+      </CardContent>
+      <CardFooter className='flex flex-wrap gap-2'>
+        <Button variant='outline' disabled={checking || busy} onClick={checkNow}>
+          {checking ? <Loader2 className='animate-spin' /> : <RefreshCw />} {t('settings.checkNow')}
+        </Button>
+        {u?.canUpgrade && (
+          <Button disabled={busy} onClick={() => setConfirm(true)}>
+            {busy ? <Loader2 className='animate-spin' /> : <Download />}
+            {phase === 'restarting'
+              ? t('settings.restarting', { version: u.latest })
+              : busy
+                ? t('settings.upgrading')
+                : t('settings.upgradeTo', { version: u.latest })}
+          </Button>
+        )}
+      </CardFooter>
+      <ConfirmDialog
+        open={confirm}
+        onOpenChange={setConfirm}
+        title={t('settings.upgradeTo', { version: u?.latest })}
+        desc={t('settings.upgradeConfirm', { version: u?.latest })}
+        confirmText={t('settings.upgradeTo', { version: u?.latest })}
+        handleConfirm={upgrade}
+      />
+    </Card>
   )
 }
 

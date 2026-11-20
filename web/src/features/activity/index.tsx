@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { Search } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { tx } from '@/i18n'
 import { cn } from '@/lib/utils'
+import { usePageState } from '@/lib/page-state'
 import { timestamp } from '@/lib/format'
 import type { ActivityEvent } from '@/lib/types'
 import { useData } from '@/api/data'
@@ -16,8 +17,8 @@ import { ActivityIcon, EventText } from './activity-icon'
 export function Activity() {
   const { t } = useTranslation()
   const { activity, folders, connections } = useData()
-  const [view, setView] = useState<'all' | 'audit' | 'problems'>('all')
-  const [q, setQ] = useState('')
+  const [view, setView] = usePageState<'all' | 'audit' | 'problems'>('activity/view', 'all')
+  const [q, setQ] = usePageState('activity/q', '')
 
   const rows = useMemo(() => {
     const ql = q.toLowerCase()
