@@ -1,0 +1,4 @@
+# Shell scripts and workflows keep LF endings even when checked out on
+# Windows: bash fails on CRLF ("$'\r': command not found").
+*.sh text eol=lf
+.github/** text eol=lf
