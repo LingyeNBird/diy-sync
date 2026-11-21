@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Installs (or updates) fdsync, the WSL side, from the GitHub releases:
 #
-#   curl -fsSL https://raw.githubusercontent.com/__GITHUB_REPO__/HEAD/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/LingyeNBird/diy-sync/HEAD/install.sh | bash
 #
 # Options (environment variables):
 #   FDSYNC_VERSION=1.2.3     a specific version (default: the newest release)
 #   FDSYNC_BIN_DIR=DIR       where to put it (default: ~/.local/bin)
 set -euo pipefail
 
-REPO="__GITHUB_REPO__"
+REPO="LingyeNBird/diy-sync"
 BIN_DIR="${FDSYNC_BIN_DIR:-$HOME/.local/bin}"
 VERSION="${FDSYNC_VERSION:-}"
 VERSION="${VERSION#v}"
