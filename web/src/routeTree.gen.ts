@@ -23,6 +23,7 @@ import { Route as AuthenticatedPairIndexRouteImport } from './routes/_authentica
 import { Route as AuthenticatedFoldersIndexRouteImport } from './routes/_authenticated/folders/index'
 import { Route as AuthenticatedConnectionsIndexRouteImport } from './routes/_authenticated/connections/index'
 import { Route as AuthenticatedConflictsIndexRouteImport } from './routes/_authenticated/conflicts/index'
+import { Route as AuthenticatedClipboardIndexRouteImport } from './routes/_authenticated/clipboard/index'
 import { Route as AuthenticatedBrowseIndexRouteImport } from './routes/_authenticated/browse/index'
 import { Route as AuthenticatedActivityIndexRouteImport } from './routes/_authenticated/activity/index'
 import { Route as AuthenticatedFoldersFolderIdRouteImport } from './routes/_authenticated/folders/$folderId'
@@ -101,6 +102,12 @@ const AuthenticatedConflictsIndexRoute =
     path: '/conflicts/',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedClipboardIndexRoute =
+  AuthenticatedClipboardIndexRouteImport.update({
+    id: '/clipboard/',
+    path: '/clipboard/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedBrowseIndexRoute =
   AuthenticatedBrowseIndexRouteImport.update({
     id: '/browse/',
@@ -138,6 +145,7 @@ export interface FileRoutesByFullPath {
   '/folders/$folderId': typeof AuthenticatedFoldersFolderIdRoute
   '/activity/': typeof AuthenticatedActivityIndexRoute
   '/browse/': typeof AuthenticatedBrowseIndexRoute
+  '/clipboard/': typeof AuthenticatedClipboardIndexRoute
   '/conflicts/': typeof AuthenticatedConflictsIndexRoute
   '/connections/': typeof AuthenticatedConnectionsIndexRoute
   '/folders/': typeof AuthenticatedFoldersIndexRoute
@@ -157,6 +165,7 @@ export interface FileRoutesByTo {
   '/folders/$folderId': typeof AuthenticatedFoldersFolderIdRoute
   '/activity': typeof AuthenticatedActivityIndexRoute
   '/browse': typeof AuthenticatedBrowseIndexRoute
+  '/clipboard': typeof AuthenticatedClipboardIndexRoute
   '/conflicts': typeof AuthenticatedConflictsIndexRoute
   '/connections': typeof AuthenticatedConnectionsIndexRoute
   '/folders': typeof AuthenticatedFoldersIndexRoute
@@ -178,6 +187,7 @@ export interface FileRoutesById {
   '/_authenticated/folders/$folderId': typeof AuthenticatedFoldersFolderIdRoute
   '/_authenticated/activity/': typeof AuthenticatedActivityIndexRoute
   '/_authenticated/browse/': typeof AuthenticatedBrowseIndexRoute
+  '/_authenticated/clipboard/': typeof AuthenticatedClipboardIndexRoute
   '/_authenticated/conflicts/': typeof AuthenticatedConflictsIndexRoute
   '/_authenticated/connections/': typeof AuthenticatedConnectionsIndexRoute
   '/_authenticated/folders/': typeof AuthenticatedFoldersIndexRoute
@@ -199,6 +209,7 @@ export interface FileRouteTypes {
     | '/folders/$folderId'
     | '/activity/'
     | '/browse/'
+    | '/clipboard/'
     | '/conflicts/'
     | '/connections/'
     | '/folders/'
@@ -218,6 +229,7 @@ export interface FileRouteTypes {
     | '/folders/$folderId'
     | '/activity'
     | '/browse'
+    | '/clipboard'
     | '/conflicts'
     | '/connections'
     | '/folders'
@@ -238,6 +250,7 @@ export interface FileRouteTypes {
     | '/_authenticated/folders/$folderId'
     | '/_authenticated/activity/'
     | '/_authenticated/browse/'
+    | '/_authenticated/clipboard/'
     | '/_authenticated/conflicts/'
     | '/_authenticated/connections/'
     | '/_authenticated/folders/'
@@ -356,6 +369,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedConflictsIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/clipboard/': {
+      id: '/_authenticated/clipboard/'
+      path: '/clipboard'
+      fullPath: '/clipboard/'
+      preLoaderRoute: typeof AuthenticatedClipboardIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/browse/': {
       id: '/_authenticated/browse/'
       path: '/browse'
@@ -393,6 +413,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedFoldersFolderIdRoute: typeof AuthenticatedFoldersFolderIdRoute
   AuthenticatedActivityIndexRoute: typeof AuthenticatedActivityIndexRoute
   AuthenticatedBrowseIndexRoute: typeof AuthenticatedBrowseIndexRoute
+  AuthenticatedClipboardIndexRoute: typeof AuthenticatedClipboardIndexRoute
   AuthenticatedConflictsIndexRoute: typeof AuthenticatedConflictsIndexRoute
   AuthenticatedConnectionsIndexRoute: typeof AuthenticatedConnectionsIndexRoute
   AuthenticatedFoldersIndexRoute: typeof AuthenticatedFoldersIndexRoute
@@ -408,6 +429,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedFoldersFolderIdRoute: AuthenticatedFoldersFolderIdRoute,
   AuthenticatedActivityIndexRoute: AuthenticatedActivityIndexRoute,
   AuthenticatedBrowseIndexRoute: AuthenticatedBrowseIndexRoute,
+  AuthenticatedClipboardIndexRoute: AuthenticatedClipboardIndexRoute,
   AuthenticatedConflictsIndexRoute: AuthenticatedConflictsIndexRoute,
   AuthenticatedConnectionsIndexRoute: AuthenticatedConnectionsIndexRoute,
   AuthenticatedFoldersIndexRoute: AuthenticatedFoldersIndexRoute,

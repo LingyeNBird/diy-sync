@@ -16,7 +16,9 @@
 //	POST /folders/{id}/tree                ← TreeReport (gzip): the client's whole folder, metadata only
 //	POST /hello                            ← Hello (who the client is, its bindings)
 //	GET  /requests?wait=30                 → []Request (long poll: things the server needs from this client)
-//	PUT  /requests/{id}                    ← the answer (file content, or empty with X-Fdsync-Error)
+//	PUT  /requests/{rid}                   ← the answer (file content, or empty with X-Fdsync-Error)
+//	GET  /clipboard                        → ClipboardList (captured Windows clipboard images, newest first)
+//	GET  /clipboard/{id}                   → image/png body
 package protocol
 
 import (
@@ -265,4 +267,31 @@ type Tokens struct {
 func Fingerprint(der []byte) string {
 	h := sha256.Sum256(der)
 	return "SHA256:" + base64.RawStdEncoding.EncodeToString(h[:])
+}
+
+// ---------------------------------------------------------------- clipboard
+
+// ClipboardItem is metadata for one PNG image held in the server's in-memory
+// clipboard pool.
+type ClipboardItem struct {
+	ID             string    `json:"id"`
+	CapturedAt     time.Time `json:"capturedAt"`
+	Width          int       `json:"width"`
+	Height         int       `json:"height"`
+	OriginalWidth  int       `json:"originalWidth,omitempty"`
+	OriginalHeight int       `json:"originalHeight,omitempty"`
+	Size           int64     `json:"size"`
+	Hash           string    `json:"hash"`
+	Selected       bool      `json:"selected"`
+	Source         string    `json:"source"` // clipboard | upload
+	Note           string    `json:"note,omitempty"`
+}
+
+// ClipboardList is the server's current clipboard image pool, newest first.
+type ClipboardList struct {
+	Paused   bool            `json:"paused"`
+	Compress bool            `json:"compress"`
+	MaxEdge  int             `json:"maxEdge"`
+	Max      int             `json:"max"`
+	Items    []ClipboardItem `json:"items"`
 }

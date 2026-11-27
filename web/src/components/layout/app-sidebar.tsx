@@ -21,10 +21,14 @@ import { NavUser } from './nav-user'
 
 export function useNavGroups() {
   const { t } = useTranslation()
-  const { conflicts, pairing } = useData()
+  const { conflicts, pairing, clipboard } = useData()
   const conflictCount = conflicts.length
   const pairingCount = pairing.length
-  const badges: Record<string, number> = { 'nav.conflicts': conflictCount, 'nav.pairing': pairingCount }
+  const badges: Record<string, number> = {
+    'nav.conflicts': conflictCount,
+    'nav.pairing': pairingCount,
+    'nav.clipboard': clipboard.selected,
+  }
   return sidebarData.navGroups.map((g) => ({
     ...g,
     title: t(g.title as never),

@@ -47,6 +47,29 @@ export async function api<T = void>(method: string, path: string, body?: unknown
   return (await res.json()) as T
 }
 
+/** POST raw binary data (e.g. an image upload) with CSRF protection. */
+export async function apiUpload<T>(path: string, blob: Blob): Promise<T> {
+  const headers: Record<string, string> = {}
+  if (blob.type) headers['Content-Type'] = blob.type
+  if (csrf) headers['X-CSRF-Token'] = csrf
+  const res = await fetch(path, {
+    method: 'POST',
+    headers,
+    body: blob,
+    credentials: 'same-origin',
+  })
+  if (!res.ok) {
+    let msg = res.statusText
+    try {
+      msg = ((await res.json()) as { error?: string }).error ?? msg
+    } catch {
+      /* not JSON */
+    }
+    throw new ApiError(res.status, msg)
+  }
+  return (await res.json()) as T
+}
+
 /** Raw bytes of a file (preview/diff), with the file's full size. */
 export async function apiBytes(path: string): Promise<{ bytes: Uint8Array; size: number }> {
   const res = await request('GET', path)

@@ -161,6 +161,15 @@ func (s *Server) PanelHandler() http.Handler {
 	mux.HandleFunc("GET /api/windirs", authed(s.apiWinDirs))
 	mux.HandleFunc("POST /api/folders", authed(s.apiAddFolder))
 	mux.HandleFunc("POST /api/connections/{id}/bindings", authed(s.apiBind))
+	mux.HandleFunc("GET /api/clipboard", authed(s.apiClipboardList))
+	mux.HandleFunc("GET /api/clipboard/{id}", authed(s.apiClipboardImage))
+	mux.HandleFunc("POST /api/clipboard/upload", authed(s.apiClipboardUpload))
+	mux.HandleFunc("PATCH /api/clipboard/{id}", authed(s.apiClipboardUpdate))
+	mux.HandleFunc("DELETE /api/clipboard/{id}", authed(s.apiClipboardDelete))
+	mux.HandleFunc("DELETE /api/clipboard", authed(s.apiClipboardClear))
+	mux.HandleFunc("POST /api/clipboard/unselect", authed(s.apiClipboardUnselect))
+	mux.HandleFunc("PUT /api/clipboard/pause", authed(s.apiClipboardPause))
+	mux.HandleFunc("PUT /api/clipboard/options", authed(s.apiClipboardOptions))
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, errors.New("no such API"))
 	})
@@ -224,7 +233,7 @@ func (g *gzipWriter) Write(b []byte) (int, error) { return g.zw.Write(b) }
 // gzipped compresses API JSON (trees can be large).
 func gzipped(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api/content" || !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+		if !strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api/content" || strings.HasPrefix(r.URL.Path, "/api/clipboard/") || !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
 			h.ServeHTTP(w, r)
 			return
 		}
@@ -507,6 +516,7 @@ func (s *Server) apiOverview(w http.ResponseWriter, _ *http.Request) {
 	if pauseOn && !pauseUntil.IsZero() {
 		pause["until"] = pauseUntil
 	}
+	clipCount, clipSelected, clipPaused := s.clip.summary()
 	writeJSON(w, map[string]any{
 		"pause":       pause,
 		"server":      map[string]any{"device": s.device, "host": host, "listen": s.cfg.Listen, "panelListen": s.cfg.PanelListen, "version": Version},
@@ -515,6 +525,7 @@ func (s *Server) apiOverview(w http.ResponseWriter, _ *http.Request) {
 		"bindings":    bindings,
 		"conflicts":   conflicts,
 		"pairing":     s.pair.pending(),
+		"clipboard":   map[string]any{"count": clipCount, "selected": clipSelected, "paused": clipPaused},
 	})
 }
 

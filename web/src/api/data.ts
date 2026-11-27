@@ -5,7 +5,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import i18n from '@/i18n'
 import { contentKind, languageFor } from '@/lib/content'
-import type { ActivityEvent, Binding, Conflict, Connection, PairingRequest, Side, SyncFolder, TreeNode } from '@/lib/types'
+import type { ActivityEvent, Binding, ClipboardSummary, Conflict, Connection, PairingRequest, Side, SyncFolder, TreeNode } from '@/lib/types'
 import { api, ApiError, apiResponse } from './client'
 
 export type Resolution = 'windows' | 'wsl' | 'both'
@@ -21,6 +21,7 @@ export type Overview = {
   pairing: PairingRequest[]
   /** Pause all: every folder paused, until a time (none = until resumed). */
   pause: { paused: boolean; until?: string }
+  clipboard?: ClipboardSummary
 }
 
 export const overviewKey = ['overview']
@@ -47,6 +48,7 @@ export const overviewQuery = {
     o.conflicts ??= []
     o.pairing ??= []
     o.pause ??= { paused: false }
+    o.clipboard ??= { count: 0, selected: 0, paused: false }
     sampleRates(o)
     return o
   },
@@ -100,6 +102,7 @@ export function useData() {
     conflicts,
     pairing: o?.pairing ?? [],
     pause: o?.pause ?? { paused: false },
+    clipboard: o?.clipboard ?? { count: 0, selected: 0, paused: false },
     activity: activity ?? [],
     refresh,
 

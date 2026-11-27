@@ -92,6 +92,7 @@ type Server struct {
 	panel   *panelAuth
 	upd     updates
 	pair    *pairing
+	clip    *clipboardStore
 	cert    tls.Certificate
 	fp      string // certificate fingerprint, "" without TLS
 
@@ -131,6 +132,7 @@ func New(cfg Config, log *slog.Logger) (*Server, error) {
 		ev: ev, reg: newRegistry(cfg.DataDir, ev), broker: newBroker()}
 	s.panel = newPanelAuth(s)
 	s.pair = newPairing()
+	s.clip = newClipboardStore()
 	if !cfg.PlainHTTP && cfg.DataDir != "" {
 		if s.cert, s.fp, err = LoadOrCreateCert(cfg.DataDir); err != nil {
 			return nil, fmt.Errorf("certificate: %w", err)
@@ -344,6 +346,7 @@ func (s *Server) Watch(ctx context.Context) {
 	for _, f := range s.folderList() {
 		go s.watchFolder(ctx, f)
 	}
+	startClipboardWatch(ctx, s.clip, s.log)
 	go func() { // the size cap holds on every write; this drops week-old entries
 		t := time.NewTicker(time.Hour)
 		defer t.Stop()
@@ -416,6 +419,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST "+p+"/hello", s.handleHello)
 	mux.HandleFunc("GET "+p+"/requests", s.handleRequests)
 	mux.HandleFunc("PUT "+p+"/requests/{rid}", s.handleAnswer)
+	mux.HandleFunc("GET "+p+"/clipboard", s.handleClipboardList)
+	mux.HandleFunc("GET "+p+"/clipboard/{id}", s.handleClipboardImage)
 	authed := s.auth(mux)
 	// Pairing and token refresh are how a client gets credentials: no auth.
 	open := http.NewServeMux()

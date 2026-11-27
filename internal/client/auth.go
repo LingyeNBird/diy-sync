@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -57,6 +58,7 @@ var ErrFingerprint = errors.New("server certificate does not match the pinned fi
 // answer within 2 minutes fails the request (it is retried).
 func NewTransport() *http.Transport {
 	return &http.Transport{
+		DialContext:           (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 		MaxIdleConnsPerHost:   8,
 		IdleConnTimeout:       90 * time.Second,
 		ResponseHeaderTimeout: 2 * time.Minute, // the long polls answer within 30 s
@@ -99,6 +101,12 @@ func FetchFingerprint(ctx context.Context, addr string) (string, error) {
 	return protocol.Fingerprint(certs[0].Raw), nil
 }
 
+type refreshCall struct {
+	done chan struct{}
+	tok  string
+	err  error
+}
+
 // TokenSource hands out access tokens, refreshing them with the refresh
 // token (which rotates; the new one is saved at once).
 type TokenSource struct {
@@ -107,46 +115,81 @@ type TokenSource struct {
 	HTTP    *http.Client
 	BaseURL string
 
-	mu      sync.Mutex
-	access  string
-	expires time.Time
+	mu       sync.Mutex
+	access   string
+	expires  time.Time
+	inflight *refreshCall
 }
 
-// Token returns a valid access token.
+// Token returns a valid access token. Concurrent callers share a single
+// in-flight refresh so an unreachable server doesn't serialize timeouts behind
+// the mutex.
 func (t *TokenSource) Token(ctx context.Context) (string, error) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	if t.access != "" && time.Until(t.expires) > time.Minute {
-		return t.access, nil
+		tok := t.access
+		t.mu.Unlock()
+		return tok, nil
 	}
-	body, _ := json.Marshal(protocol.RefreshRequest{RefreshToken: t.Creds.RefreshToken})
-	req, err := http.NewRequestWithContext(ctx, "POST", t.BaseURL+protocol.APIPrefix+"/token", bytes.NewReader(body))
+	if call := t.inflight; call != nil {
+		t.mu.Unlock()
+		select {
+		case <-call.done:
+			return call.tok, call.err
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
+	call := &refreshCall{done: make(chan struct{})}
+	t.inflight = call
+	refreshTok := t.Creds.RefreshToken
+	t.mu.Unlock()
+
+	tok, nextRefresh, exp, err := t.refresh(ctx, refreshTok)
+
+	t.mu.Lock()
+	if err == nil {
+		t.Creds.RefreshToken = nextRefresh
+		if t.Path != "" {
+			if serr := t.Creds.Save(t.Path); serr != nil {
+				err = fmt.Errorf("save rotated refresh token: %w", serr)
+			}
+		}
+		if err == nil {
+			t.access, t.expires = tok, exp
+		}
+	}
+	call.tok, call.err = tok, err
+	t.inflight = nil
+	close(call.done)
+	t.mu.Unlock()
+	return tok, err
+}
+
+func (t *TokenSource) refresh(ctx context.Context, refreshTok string) (access, nextRefresh string, expires time.Time, err error) {
+	body, _ := json.Marshal(protocol.RefreshRequest{RefreshToken: refreshTok})
+	rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(rctx, "POST", t.BaseURL+protocol.APIPrefix+"/token", bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return "", "", time.Time{}, err
 	}
 	resp, err := t.HTTP.Do(req)
 	if err != nil {
-		return "", err
+		return "", "", time.Time{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusUnauthorized {
-		return "", ErrRevoked
+		return "", "", time.Time{}, ErrRevoked
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("token refresh: %s", resp.Status)
+		return "", "", time.Time{}, fmt.Errorf("token refresh: %s", resp.Status)
 	}
 	var tok protocol.Tokens
 	if err := json.NewDecoder(resp.Body).Decode(&tok); err != nil {
-		return "", err
+		return "", "", time.Time{}, err
 	}
-	t.Creds.RefreshToken = tok.RefreshToken
-	if t.Path != "" {
-		if err := t.Creds.Save(t.Path); err != nil {
-			return "", fmt.Errorf("save rotated refresh token: %w", err)
-		}
-	}
-	t.access, t.expires = tok.AccessToken, time.Now().Add(time.Duration(tok.ExpiresIn)*time.Second)
-	return t.access, nil
+	return tok.AccessToken, tok.RefreshToken, time.Now().Add(time.Duration(tok.ExpiresIn) * time.Second), nil
 }
 
 // Invalidate drops the cached access token (after a 401).

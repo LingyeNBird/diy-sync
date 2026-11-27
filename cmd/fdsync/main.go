@@ -61,7 +61,9 @@ Usage:
   fdsync stop                             stop the background daemon
   fdsync daemon [--bind FOLDER=PATH ...]  keep syncing in this terminal (bindings can also be made in the panel)
   fdsync sync   [--bind FOLDER=PATH ...]  one round, then exit
+  fdsync clip   [list|get|help] [flags]   list, fetch, or show AI usage guide for Windows screenshots
   fdsync status                           show the connection and bindings
+  fdsync help   [clip]                    show usage help (use "fdsync help clip" for AI guide)
   fdsync install-service                  write a systemd user unit for the daemon
   fdsync version                          print the version
 
@@ -90,6 +92,16 @@ func main() {
 		return
 	case "stop":
 		stop(os.Args[2:])
+		return
+	case "clip":
+		clip(os.Args[2:])
+		return
+	case "help", "--help", "-h":
+		if len(os.Args) > 2 && os.Args[2] == "clip" {
+			fmt.Print(clipHelpText)
+			return
+		}
+		fmt.Print(usage)
 		return
 	case "install-service":
 		installService()
@@ -278,6 +290,14 @@ func main() {
 		return nil
 	}
 	go c.ServeRequests(ctx) // previews, deletes and new bindings asked for in the panel
+	sockPath := filepath.Join(*dataDir, "daemon.sock")
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := client.ServeLocalIPC(ctx, sockPath, c, log); err != nil && ctx.Err() == nil {
+			log.Warn("local ipc stopped", "err", err)
+		}
+	}()
 	for _, s := range sessions {
 		start(s)
 	}
@@ -470,7 +490,8 @@ func status(args []string) {
 	dataDir := fs.String("data-dir", defaultDataDir(), "state directory")
 	credPath := fs.String("credentials", defaultCredentials(), "credentials saved by connect")
 	_ = fs.Parse(args)
-	if pid := runningPid(*dataDir); pid != 0 {
+	pid := runningPid(*dataDir)
+	if pid != 0 {
 		fmt.Printf("Daemon:      running%s\n", pidNote(pid))
 	} else {
 		fmt.Println("Daemon:      not running (start it with: fdsync start)")
@@ -484,12 +505,28 @@ func status(args []string) {
 			where += " (the Windows host, followed when its address changes)"
 		}
 		fmt.Printf("Server:      %s\nConnection:  %s (device %s)\nFingerprint: %s\n", where, creds.Name, creds.Device, creds.Fingerprint)
-		hc := &http.Client{Transport: client.PinnedTransport(creds.Fingerprint), Timeout: 10 * time.Second}
-		ts := &client.TokenSource{Creds: creds, Path: *credPath, HTTP: hc, BaseURL: creds.ServerURL()}
-		if _, err := ts.Token(context.Background()); err != nil {
-			fmt.Printf("Server:      not usable: %v\n", err)
+		ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+		defer cancel()
+		sockPath := filepath.Join(*dataDir, "daemon.sock")
+		if ipc, err := client.DialLocalIPC(ctx, sockPath); err == nil {
+			if err := ipc.Ping(ctx); err != nil {
+				fmt.Printf("Server:      not usable: %v\n", err)
+			} else {
+				fmt.Println("Server:      reachable, credentials valid (via daemon)")
+			}
+		} else if pid != 0 {
+			fmt.Println("Server:      check skipped (daemon running without local IPC; restart it to check safely)")
+		} else if lock, _, lerr := lockDaemon(*dataDir); lerr == nil && lock != nil {
+			defer lock.Close()
+			hc := &http.Client{Transport: client.PinnedTransport(creds.Fingerprint), Timeout: 10 * time.Second}
+			ts := &client.TokenSource{Creds: creds, Path: *credPath, HTTP: hc, BaseURL: creds.ServerURL()}
+			if _, err := ts.Token(ctx); err != nil {
+				fmt.Printf("Server:      not usable: %v\n", err)
+			} else {
+				fmt.Println("Server:      reachable, credentials valid")
+			}
 		} else {
-			fmt.Println("Server:      reachable, credentials valid")
+			fmt.Println("Server:      check skipped (daemon is starting)")
 		}
 	}
 	bs := loadBindings(*dataDir)

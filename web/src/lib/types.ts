@@ -153,3 +153,32 @@ export type TrashItem = {
   when: string
   size: number
 }
+
+/** One screenshot or uploaded image held in the server's memory pool. */
+export type ClipboardItem = {
+  id: string
+  capturedAt: string
+  width: number
+  height: number
+  originalWidth?: number
+  originalHeight?: number
+  size: number
+  hash: string
+  selected: boolean
+  source: 'clipboard' | 'upload'
+  note?: string
+}
+
+export type ClipboardList = {
+  paused: boolean
+  compress: boolean
+  maxEdge: number
+  max: number
+  items: ClipboardItem[]
+}
+
+export type ClipboardSummary = {
+  count: number
+  selected: number
+  paused: boolean
+}
