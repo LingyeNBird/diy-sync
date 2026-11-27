@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"image/jpeg"
 	"image/png"
 	"log/slog"
 	"os"
@@ -157,6 +158,7 @@ type winClipboardBridge struct {
 	cfImagePNG  uint32
 	lastSeq     atomic.Uint32
 	log         *slog.Logger
+	toast       *winToastHost
 	pending     *notifyPayload
 	activeClick *notifyPayload
 	iconAdded   bool
@@ -164,7 +166,9 @@ type winClipboardBridge struct {
 }
 
 func newWinClipboardBridge() *winClipboardBridge {
-	b := &winClipboardBridge{}
+	b := &winClipboardBridge{
+		toast: newWinToastHost(),
+	}
 	if r, _, _ := procRegisterClipboardFormatW.Call(uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("PNG")))); r != 0 {
 		b.cfPNG = uint32(r)
 	}
@@ -270,6 +274,13 @@ func (b *winClipboardBridge) start(ctx context.Context, store *clipboardStore, l
 	b.mu.Lock()
 	b.log = log
 	b.mu.Unlock()
+	if b.toast != nil {
+		b.toast.start(ctx, log, func(args string) {
+			if id := parseToastOpenID(args); id != "" {
+				openIncomingImageByID(id, log)
+			}
+		})
+	}
 	fmts := winClipFormats{png: b.cfPNG, imagePNG: b.cfImagePNG}
 	sig := make(chan struct{}, 1)
 
@@ -394,8 +405,8 @@ func (b *winClipboardBridge) start(ctx context.Context, store *clipboardStore, l
 }
 
 // onWSLImage handles an image pushed from WSL: optionally writes it to the
-// Windows clipboard and pops a clickable Windows notification that opens the
-// image with the default viewer when clicked.
+// Windows clipboard and pops a native Windows toast notification with an inline
+// hero preview image that opens the full PNG in the default viewer when clicked.
 func (b *winClipboardBridge) onWSLImage(item protocol.ClipboardItem, pngBytes []byte, copyToWin bool, log *slog.Logger) {
 	if copyToWin {
 		if err := b.writeClipboardImage(pngBytes); err != nil {
@@ -403,27 +414,46 @@ func (b *winClipboardBridge) onWSLImage(item protocol.ClipboardItem, pngBytes []
 		}
 	}
 	zh := isWindowsZH()
-	title := "fdsync — Image from WSL"
+	toastTitle := "Image from WSL"
+	balloonTitle := "fdsync — Image from WSL"
 	body := fmt.Sprintf("%dx%d · Click to open with your image viewer", item.Width, item.Height)
+	openBtn := "Open image"
 	if copyToWin {
-		body = fmt.Sprintf("%dx%d · Copied to clipboard · Click to open", item.Width, item.Height)
+		body = fmt.Sprintf("%dx%d · Copied to clipboard", item.Width, item.Height)
 	}
 	if zh {
-		title = "fdsync — 收到来自 WSL 的图片"
+		toastTitle = "收到来自 WSL 的图片"
+		balloonTitle = "fdsync — 收到来自 WSL 的图片"
 		body = fmt.Sprintf("%dx%d · 点击用图片工具打开", item.Width, item.Height)
+		openBtn = "打开图片"
 		if copyToWin {
-			body = fmt.Sprintf("%dx%d · 已复制到剪贴板 · 点击用图片工具打开", item.Width, item.Height)
+			body = fmt.Sprintf("%dx%d · 已复制到剪贴板", item.Width, item.Height)
 		}
 	}
 	if item.Note != "" {
 		body = item.Note + " (" + body + ")"
 	}
-	b.postNotification(&notifyPayload{
-		title:    title,
-		body:     body,
-		imageID:  item.ID,
-		pngBytes: append([]byte(nil), pngBytes...),
-	})
+	pngCopy := append([]byte(nil), pngBytes...)
+	go func() {
+		_, previewPath := saveIncomingImage(item.ID, pngCopy, log)
+		if b.toast != nil && previewPath != "" {
+			xmlPayload := buildToastXML(toastTitle, body, toastFileURI(previewPath), toastOpenPrefix+item.ID, openBtn)
+			if err := b.toast.show(xmlPayload); err == nil {
+				if log != nil {
+					log.Info("showed windows image toast", "id", item.ID)
+				}
+				return
+			} else if log != nil {
+				log.Warn("winrt image toast failed; falling back to balloon", "id", item.ID, "err", err)
+			}
+		}
+		b.postNotification(&notifyPayload{
+			title:    balloonTitle,
+			body:     body,
+			imageID:  item.ID,
+			pngBytes: pngCopy,
+		})
+	}()
 }
 
 // onWSLText writes plain text from WSL to the Windows clipboard and displays a
@@ -438,19 +468,31 @@ func (b *winClipboardBridge) onWSLText(text string, log *slog.Logger) error {
 		preview = string(pr[:60]) + "…"
 	}
 	zh := isWindowsZH()
-	title := "fdsync — Text copied from WSL"
+	toastTitle := "Text copied from WSL"
+	balloonTitle := "fdsync — Text copied from WSL"
 	body := fmt.Sprintf("%d characters copied", runes)
 	if preview != "" {
 		body += ": " + preview
 	}
 	if zh {
-		title = "fdsync — 已复制来自 WSL 的文本"
+		toastTitle = "已复制来自 WSL 的文本"
+		balloonTitle = "fdsync — 已复制来自 WSL 的文本"
 		body = fmt.Sprintf("已复制 %d 个字符", runes)
 		if preview != "" {
 			body += "：" + preview
 		}
 	}
-	b.postNotification(&notifyPayload{title: title, body: body})
+	go func() {
+		if b.toast != nil {
+			xmlPayload := buildToastXML(toastTitle, body, "", "", "")
+			if err := b.toast.show(xmlPayload); err == nil {
+				return
+			} else if log != nil {
+				log.Warn("winrt text toast failed; falling back to balloon", "err", err)
+			}
+		}
+		b.postNotification(&notifyPayload{title: balloonTitle, body: body})
+	}()
 	if log != nil {
 		log.Info("copied wsl text to windows clipboard", "chars", runes)
 	}
@@ -537,22 +579,67 @@ func (b *winClipboardBridge) removeNotifyIconOnUIThread(hwnd uintptr) {
 	procShellNotifyIcon.Call(nimDelete, uintptr(unsafe.Pointer(&nid)))
 }
 
-func openIncomingImage(id string, pngBytes []byte, log *slog.Logger) {
-	dir := filepath.Join(os.TempDir(), "fdsync-incoming")
+func incomingImagesDir() string {
+	return filepath.Join(os.TempDir(), "fdsync-incoming")
+}
+
+// saveIncomingImage persists an incoming WSL PNG to %TEMP%\fdsync-incoming and
+// returns (fullPath, previewPath). For very large PNGs (>2 MiB), it also writes
+// a lightweight JPEG thumbnail so Windows Toast renders the hero preview fast
+// while clicking still opens fullPath in full resolution.
+func saveIncomingImage(id string, pngBytes []byte, log *slog.Logger) (fullPath, previewPath string) {
+	dir := incomingImagesDir()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		if log != nil {
 			log.Warn("create incoming dir", "err", err)
 		}
-		return
+		return "", ""
 	}
-	dst := filepath.Join(dir, id+".png")
-	if err := os.WriteFile(dst, pngBytes, 0o600); err != nil {
+	fullPath = filepath.Join(dir, id+".png")
+	if err := os.WriteFile(fullPath, pngBytes, 0o600); err != nil {
 		if log != nil {
 			log.Warn("write incoming image", "err", err)
 		}
-		return
+		return "", ""
+	}
+	previewPath = fullPath
+	if len(pngBytes) > 2<<20 {
+		if img, err := png.Decode(bytes.NewReader(pngBytes)); err == nil {
+			if scaled, ok := resizeImage(img, 728); ok {
+				img = scaled
+			}
+			var jb bytes.Buffer
+			if err := jpeg.Encode(&jb, img, &jpeg.Options{Quality: 88}); err == nil {
+				thumbPath := filepath.Join(dir, id+"-thumb.jpg")
+				if err := os.WriteFile(thumbPath, jb.Bytes(), 0o600); err == nil {
+					previewPath = thumbPath
+				}
+			}
+		}
 	}
 	pruneIncomingDir(dir, 20)
+	return fullPath, previewPath
+}
+
+func openIncomingImage(id string, pngBytes []byte, log *slog.Logger) {
+	fullPath, _ := saveIncomingImage(id, pngBytes, log)
+	if fullPath != "" {
+		shellOpenFile(fullPath, log)
+	}
+}
+
+func openIncomingImageByID(id string, log *slog.Logger) {
+	dst := filepath.Join(incomingImagesDir(), id+".png")
+	if fi, err := os.Stat(dst); err != nil || fi.IsDir() {
+		if log != nil {
+			log.Warn("incoming image not found for toast click", "id", id, "path", dst, "err", err)
+		}
+		return
+	}
+	shellOpenFile(dst, log)
+}
+
+func shellOpenFile(dst string, log *slog.Logger) {
 	verb := windows.StringToUTF16Ptr("open")
 	filePtr := windows.StringToUTF16Ptr(dst)
 	r, _, err := procShellExecuteW.Call(0, uintptr(unsafe.Pointer(verb)), uintptr(unsafe.Pointer(filePtr)), 0, 0, swShowNormal)
@@ -563,7 +650,7 @@ func openIncomingImage(id string, pngBytes []byte, log *slog.Logger) {
 
 func pruneIncomingDir(dir string, keep int) {
 	entries, err := os.ReadDir(dir)
-	if err != nil || len(entries) <= keep {
+	if err != nil {
 		return
 	}
 	type fi struct {
@@ -585,6 +672,8 @@ func pruneIncomingDir(dir string, keep int) {
 	sort.Slice(files, func(i, j int) bool { return files[i].mod.After(files[j].mod) })
 	for _, f := range files[keep:] {
 		_ = os.Remove(filepath.Join(dir, f.name))
+		stem := strings.TrimSuffix(f.name, ".png")
+		_ = os.Remove(filepath.Join(dir, stem+"-thumb.jpg"))
 	}
 }
 

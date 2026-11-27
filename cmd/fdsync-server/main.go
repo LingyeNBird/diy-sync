@@ -20,6 +20,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -46,6 +47,13 @@ Flags:
 `
 
 func main() {
+	for _, a := range os.Args[1:] {
+		if strings.EqualFold(a, "-toast-activated") || strings.EqualFold(a, "--toast-activated") ||
+			strings.EqualFold(a, "-Embedding") || strings.EqualFold(a, "/Embedding") {
+			server.HandleToastActivation(context.Background(), nil)
+			return
+		}
+	}
 	defaultData := filepath.Join(must(os.UserCacheDir()), "fdsync") // %LOCALAPPDATA%\fdsync on Windows
 	dataDir := flag.String("data-dir", defaultData, "data directory (config, indexes)")
 	listen := flag.String("listen", "", `override the sync API address from config.json, e.g. "0.0.0.0:7443"`)
