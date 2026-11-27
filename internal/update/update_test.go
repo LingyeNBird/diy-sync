@@ -88,3 +88,34 @@ func TestInstall(t *testing.T) {
 		t.Fatal("the failed download was left behind")
 	}
 }
+
+func TestByVersion(t *testing.T) {
+	name := AssetName("fdsync")
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/" + Repo + "/releases/tags/v1.2.3":
+			fmt.Fprintf(w, `{"tag_name":"v1.2.3","html_url":"u","assets":[{"name":%q,"browser_download_url":%q},{"name":"SHA256SUMS","browser_download_url":%q}]}`,
+				name, srv.URL+"/dl/"+name, srv.URL+"/dl/SHA256SUMS")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	apiBase = srv.URL
+	defer func() { apiBase = "https://api.github.com" }()
+
+	r, err := ByVersion(context.Background(), "fdsync", "v1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Version != "1.2.3" || !r.HasAsset() {
+		t.Fatalf("release = %+v", r)
+	}
+	if _, err := ByVersion(context.Background(), "fdsync", "not-a-version"); err == nil {
+		t.Fatal("invalid version accepted")
+	}
+	if _, err := ByVersion(context.Background(), "fdsync", "9.9.9"); err == nil {
+		t.Fatal("missing tag accepted")
+	}
+}

@@ -66,10 +66,23 @@ var (
 // Latest asks GitHub for the newest release (drafts and pre-releases are
 // not "latest").
 func Latest(ctx context.Context, program string) (*Release, error) {
+	return fetchRelease(ctx, "/repos/"+Repo+"/releases/latest", program)
+}
+
+// ByVersion fetches a specific release by version (e.g. "1.1.0" or "v1.1.0").
+func ByVersion(ctx context.Context, program, version string) (*Release, error) {
+	ver := strings.TrimPrefix(strings.TrimSpace(version), "v")
+	if _, ok := parse(ver); !ok {
+		return nil, fmt.Errorf("invalid version %q (want X.Y.Z)", version)
+	}
+	return fetchRelease(ctx, "/repos/"+Repo+"/releases/tags/v"+ver, program)
+}
+
+func fetchRelease(ctx context.Context, path, program string) (*Release, error) {
 	if strings.HasPrefix(Repo, "__") && apiBase == "https://api.github.com" {
 		return nil, errors.New("this build has no release repository configured")
 	}
-	req, err := http.NewRequestWithContext(ctx, "GET", apiBase+"/repos/"+Repo+"/releases/latest", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", apiBase+path, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -81,7 +94,7 @@ func Latest(ctx context.Context, program string) (*Release, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, errors.New("no release has been published yet")
+		return nil, errors.New("release not found on GitHub")
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("GitHub answered %s", resp.Status)

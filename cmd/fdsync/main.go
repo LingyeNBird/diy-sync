@@ -63,6 +63,7 @@ Usage:
   fdsync sync   [--bind FOLDER=PATH ...]  one round, then exit
   fdsync clip   [list|get|help] [flags]   list, fetch, or show AI usage guide for Windows screenshots
   fdsync status                           show the connection and bindings
+  fdsync upgrade [--check]                check for and install the newest release (restarts daemon)
   fdsync help   [clip]                    show usage help (use "fdsync help clip" for AI guide)
   fdsync install-service                  write a systemd user unit for the daemon
   fdsync version                          print the version
@@ -95,6 +96,9 @@ func main() {
 		return
 	case "clip":
 		clip(os.Args[2:])
+		return
+	case "upgrade", "update":
+		upgrade(os.Args[2:])
 		return
 	case "help", "--help", "-h":
 		if len(os.Args) > 2 && os.Args[2] == "clip" {

@@ -38,8 +38,10 @@ In WSL (puts `fdsync` in `~/.local/bin` and adds that folder to `PATH` in `~/.ba
 curl -fsSL https://raw.githubusercontent.com/LingyeNBird/diy-sync/HEAD/install.sh | bash
 ```
 
-Run it again to update. `FDSYNC_VERSION=1.2.3` installs a given version and
-`FDSYNC_BIN_DIR=DIR` picks another folder, e.g.
+Run it again to upgrade (or just run `fdsync upgrade` once installed — it
+checks for newer releases, verifies `SHA256SUMS`, swaps the binary and restarts
+the daemon if it was running). `FDSYNC_VERSION=1.2.3` installs a given version
+and `FDSYNC_BIN_DIR=DIR` picks another folder, e.g.
 `curl -fsSL …/install.sh | FDSYNC_VERSION=1.2.3 bash`.
 
 On Windows, download `fdsync-server-windows-amd64.exe` from the

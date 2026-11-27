@@ -121,25 +121,37 @@ func start(args []string) {
 // stop ends the running daemon and waits until it has finished.
 func stop(args []string) {
 	dir, _ := filepath.Abs(dataDirArg(args))
-	pid := runningPid(dir)
+	pid, err := stopDaemon(dir)
+	if err != nil {
+		fatal(err)
+	}
 	if pid == 0 {
 		fmt.Println("fdsync is not running.")
 		return
 	}
+	fmt.Printf("fdsync stopped (pid %d).\n", pid)
+}
+
+// stopDaemon signals the running daemon for dir and waits for its lock to clear.
+// Returns pid == 0 when no daemon is running.
+func stopDaemon(dir string) (int, error) {
+	pid := runningPid(dir)
+	if pid == 0 {
+		return 0, nil
+	}
 	if pid < 0 {
-		fatal(errors.New("a daemon runs but didn't record its pid (started by an older build); stop it with: pkill -x fdsync"))
+		return 0, errors.New("a daemon runs but didn't record its pid (started by an older build); stop it with: pkill -x fdsync")
 	}
 	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
-		fatal(fmt.Errorf("stop pid %d: %w", pid, err))
+		return 0, fmt.Errorf("stop pid %d: %w", pid, err)
 	}
 	for range 150 {
 		if runningPid(dir) == 0 {
-			fmt.Printf("fdsync stopped (pid %d).\n", pid)
-			return
+			return pid, nil
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	fatal(fmt.Errorf("pid %d is still running after 15 s", pid))
+	return 0, fmt.Errorf("pid %d is still running after 15 s", pid)
 }
 
 func pidNote(pid int) string {
