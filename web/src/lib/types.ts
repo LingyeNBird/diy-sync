@@ -158,6 +158,7 @@ export type TrashItem = {
 export type ClipboardItem = {
   id: string
   capturedAt: string
+  lastReadAt?: string
   width: number
   height: number
   originalWidth?: number
@@ -165,13 +166,14 @@ export type ClipboardItem = {
   size: number
   hash: string
   selected: boolean
-  source: 'clipboard' | 'upload'
+  source: 'clipboard' | 'upload' | 'wsl'
   note?: string
 }
 
 export type ClipboardList = {
   paused: boolean
   compress: boolean
+  autoUnselect: boolean
   maxEdge: number
   max: number
   items: ClipboardItem[]

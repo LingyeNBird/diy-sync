@@ -55,9 +55,45 @@ type Client struct {
 	// OnBind creates a binding the admin made in the panel (the daemon
 	// starts syncing it and remembers it). nil = not allowed.
 	OnBind func(b Binding) error
+	// RefreshBaseURL re-resolves the server URL (e.g. WSL's default gateway)
+	// after a network error, so a daemon recovers if the host IP changes.
+	RefreshBaseURL func() string
 
+	urlMu    sync.RWMutex
 	mu       sync.Mutex
 	sessions []*Session
+}
+
+func (c *Client) getBaseURL() string {
+	c.urlMu.RLock()
+	defer c.urlMu.RUnlock()
+	return c.BaseURL
+}
+
+func (c *Client) maybeRefreshBaseURL() bool {
+	if c.RefreshBaseURL == nil {
+		return false
+	}
+	next := c.RefreshBaseURL()
+	if next == "" {
+		return false
+	}
+	c.urlMu.Lock()
+	old := c.BaseURL
+	changed := next != old
+	if changed {
+		c.BaseURL = next
+	}
+	c.urlMu.Unlock()
+	if changed {
+		if c.Tokens != nil {
+			c.Tokens.SetBaseURL(next)
+		}
+		if c.Log != nil {
+			c.Log.Info("Windows host address changed; updated server URL", "from", old, "to", next)
+		}
+	}
+	return changed
 }
 
 // Binding links a server folder to a local folder.
@@ -195,7 +231,7 @@ func (c *Client) do(ctx context.Context, method, path string, q url.Values, body
 }
 
 func (c *Client) doHeader(ctx context.Context, method, path string, q url.Values, body io.Reader, hdr map[string]string, out any) error {
-	u := c.BaseURL + protocol.APIPrefix + path
+	u := c.getBaseURL() + protocol.APIPrefix + path
 	if len(q) > 0 {
 		u += "?" + q.Encode()
 	}
@@ -211,6 +247,7 @@ func (c *Client) doHeader(ctx context.Context, method, path string, q url.Values
 	}
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
+		c.maybeRefreshBaseURL()
 		return err
 	}
 	defer resp.Body.Close()
@@ -320,7 +357,7 @@ func (s *Session) sendTree(ctx context.Context) error {
 	if err := zw.Close(); err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, "POST", s.c.BaseURL+protocol.APIPrefix+s.folderPath("/tree"), &buf)
+	req, err := http.NewRequestWithContext(ctx, "POST", s.c.getBaseURL()+protocol.APIPrefix+s.folderPath("/tree"), &buf)
 	if err != nil {
 		return err
 	}
@@ -904,7 +941,7 @@ func (s *Session) fetchBundle(ctx context.Context, ws []*want, st *Stats) {
 		}
 	}()
 	body, _ := json.Marshal(req)
-	hreq, err := http.NewRequestWithContext(ctx, "POST", s.c.BaseURL+protocol.APIPrefix+s.folderPath("/bundle/get"), bytes.NewReader(body))
+	hreq, err := http.NewRequestWithContext(ctx, "POST", s.c.getBaseURL()+protocol.APIPrefix+s.folderPath("/bundle/get"), bytes.NewReader(body))
 	if err != nil {
 		fail(err)
 		return
@@ -1013,7 +1050,7 @@ func (s *Session) fetch(ctx context.Context, r, old *index.Entry, st *Stats) (st
 // rangeGet fetches bytes from..to (inclusive) of the server's version.
 func (s *Session) rangeGet(ctx context.Context, r *index.Entry, from, to int64) (io.ReadCloser, error) {
 	q := url.Values{"path": {r.Path}, "hash": {r.Hash}}
-	req, err := http.NewRequestWithContext(ctx, "GET", s.c.BaseURL+protocol.APIPrefix+s.folderPath("/content")+"?"+q.Encode(), nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", s.c.getBaseURL()+protocol.APIPrefix+s.folderPath("/content")+"?"+q.Encode(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1034,7 +1071,7 @@ func (s *Session) rangeGet(ctx context.Context, r *index.Entry, from, to int64) 
 
 func (s *Session) download(ctx context.Context, r *index.Entry) (string, error) {
 	q := url.Values{"path": {r.Path}, "hash": {r.Hash}}
-	req, err := http.NewRequestWithContext(ctx, "GET", s.c.BaseURL+protocol.APIPrefix+s.folderPath("/content")+"?"+q.Encode(), nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", s.c.getBaseURL()+protocol.APIPrefix+s.folderPath("/content")+"?"+q.Encode(), nil)
 	if err != nil {
 		return "", err
 	}

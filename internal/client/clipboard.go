@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -22,6 +23,8 @@ import (
 type ClipboardSource interface {
 	ClipboardList(ctx context.Context) (*protocol.ClipboardList, error)
 	ClipboardImage(ctx context.Context, id string) ([]byte, error)
+	ClipboardPush(ctx context.Context, img []byte, note string, copyToWin bool) (*protocol.ClipboardItem, error)
+	ClipboardPushText(ctx context.Context, text string) error
 }
 
 // Ping verifies that the server is reachable and this client's credentials are
@@ -61,7 +64,7 @@ func (c *Client) ClipboardImage(ctx context.Context, id string) ([]byte, error) 
 }
 
 func (c *Client) clipboardImageOnce(ctx context.Context, id string) ([]byte, error) {
-	u := c.BaseURL + protocol.APIPrefix + "/clipboard/" + url.PathEscape(id)
+	u := c.getBaseURL() + protocol.APIPrefix + "/clipboard/" + url.PathEscape(id)
 	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
 	if err != nil {
 		return nil, err
@@ -71,6 +74,7 @@ func (c *Client) clipboardImageOnce(ctx context.Context, id string) ([]byte, err
 	}
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
+		c.maybeRefreshBaseURL()
 		return nil, err
 	}
 	defer resp.Body.Close()
@@ -85,6 +89,37 @@ func (c *Client) clipboardImageOnce(ctx context.Context, id string) ([]byte, err
 	return io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 }
 
+// ClipboardPush sends an image from WSL to Windows (stores in panel, optionally
+// copies to Windows clipboard, and shows a clickable Windows notification).
+func (c *Client) ClipboardPush(ctx context.Context, img []byte, note string, copyToWin bool) (*protocol.ClipboardItem, error) {
+	q := url.Values{}
+	if note != "" {
+		q.Set("note", note)
+	}
+	if !copyToWin {
+		q.Set("copy", "0")
+	}
+	var out protocol.ClipboardItem
+	err := c.do(ctx, "POST", "/clipboard", q, bytes.NewReader(img), &out)
+	if isUnauthorized(err) && c.Tokens != nil {
+		err = c.do(ctx, "POST", "/clipboard", q, bytes.NewReader(img), &out)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ClipboardPushText sends UTF-8 text from WSL to the Windows clipboard.
+func (c *Client) ClipboardPushText(ctx context.Context, text string) error {
+	body, _ := json.Marshal(protocol.ClipboardTextRequest{Text: text})
+	err := c.do(ctx, "POST", "/clipboard/text", nil, bytes.NewReader(body), nil)
+	if isUnauthorized(err) && c.Tokens != nil {
+		err = c.do(ctx, "POST", "/clipboard/text", nil, bytes.NewReader(body), nil)
+	}
+	return err
+}
+
 func isUnauthorized(err error) bool {
 	var he *httpError
 	return errors.As(err, &he) && he.code == http.StatusUnauthorized
@@ -93,8 +128,9 @@ func isUnauthorized(err error) bool {
 // ---------------------------------------------------------------- local daemon IPC
 
 // ServeLocalIPC exposes a local-only Unix domain socket (mode 0600) so CLI
-// subcommands such as `fdsync clip` can reuse the running daemon's HTTPS
-// connection and rotating TokenSource without racing on credentials.json.
+// subcommands such as `fdsync clip` and `fdsync status` can reuse the running
+// daemon's HTTPS connection and rotating TokenSource without racing on
+// credentials.json.
 func ServeLocalIPC(ctx context.Context, sockPath string, c *Client, log *slog.Logger) error {
 	_ = os.Remove(sockPath)
 	ln, err := net.Listen("unix", sockPath)
@@ -135,6 +171,34 @@ func ServeLocalIPC(ctx context.Context, sockPath string, c *Client, log *slog.Lo
 		w.Header().Set("Content-Type", "image/png")
 		w.Header().Set("Content-Length", strconv.Itoa(len(b)))
 		_, _ = w.Write(b)
+	})
+	mux.HandleFunc("POST /clipboard", func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(io.LimitReader(r.Body, (25<<20)+1))
+		if err != nil {
+			writeLocalErr(w, err)
+			return
+		}
+		q := r.URL.Query()
+		copyToWin := q.Get("copy") != "0" && q.Get("copy") != "false"
+		item, err := c.ClipboardPush(r.Context(), body, q.Get("note"), copyToWin)
+		if err != nil {
+			writeLocalErr(w, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(item)
+	})
+	mux.HandleFunc("POST /clipboard/text", func(w http.ResponseWriter, r *http.Request) {
+		var req protocol.ClipboardTextRequest
+		if err := json.NewDecoder(io.LimitReader(r.Body, 4<<20)).Decode(&req); err != nil {
+			writeLocalErr(w, err)
+			return
+		}
+		if err := c.ClipboardPushText(r.Context(), req.Text); err != nil {
+			writeLocalErr(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	})
 
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
@@ -245,6 +309,54 @@ func (l *LocalIPCClient) ClipboardImage(ctx context.Context, id string) ([]byte,
 		return nil, decodeLocalErr(resp)
 	}
 	return io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+}
+
+func (l *LocalIPCClient) ClipboardPush(ctx context.Context, img []byte, note string, copyToWin bool) (*protocol.ClipboardItem, error) {
+	u := "http://fdsync.local/clipboard"
+	q := url.Values{}
+	if note != "" {
+		q.Set("note", note)
+	}
+	if !copyToWin {
+		q.Set("copy", "0")
+	}
+	if len(q) > 0 {
+		u += "?" + q.Encode()
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", u, bytes.NewReader(img))
+	if err != nil {
+		return nil, err
+	}
+	resp, err := l.hc.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return nil, decodeLocalErr(resp)
+	}
+	var out protocol.ClipboardItem
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (l *LocalIPCClient) ClipboardPushText(ctx context.Context, text string) error {
+	body, _ := json.Marshal(protocol.ClipboardTextRequest{Text: text})
+	req, err := http.NewRequestWithContext(ctx, "POST", "http://fdsync.local/clipboard/text", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	resp, err := l.hc.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return decodeLocalErr(resp)
+	}
+	return nil
 }
 
 func decodeLocalErr(resp *http.Response) error {

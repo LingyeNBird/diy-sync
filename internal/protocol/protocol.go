@@ -18,7 +18,9 @@
 //	GET  /requests?wait=30                 → []Request (long poll: things the server needs from this client)
 //	PUT  /requests/{rid}                   ← the answer (file content, or empty with X-Fdsync-Error)
 //	GET  /clipboard                        → ClipboardList (captured Windows clipboard images, newest first)
-//	GET  /clipboard/{id}                   → image/png body
+//	GET  /clipboard/{id}                   → image/png body (marks item read by WSL)
+//	POST /clipboard                        ← image body from WSL (copies to Windows clipboard + notifies)
+//	POST /clipboard/text                   ← ClipboardTextRequest from WSL (copies text to Windows clipboard)
 package protocol
 
 import (
@@ -274,24 +276,31 @@ func Fingerprint(der []byte) string {
 // ClipboardItem is metadata for one PNG image held in the server's in-memory
 // clipboard pool.
 type ClipboardItem struct {
-	ID             string    `json:"id"`
-	CapturedAt     time.Time `json:"capturedAt"`
-	Width          int       `json:"width"`
-	Height         int       `json:"height"`
-	OriginalWidth  int       `json:"originalWidth,omitempty"`
-	OriginalHeight int       `json:"originalHeight,omitempty"`
-	Size           int64     `json:"size"`
-	Hash           string    `json:"hash"`
-	Selected       bool      `json:"selected"`
-	Source         string    `json:"source"` // clipboard | upload
-	Note           string    `json:"note,omitempty"`
+	ID             string     `json:"id"`
+	CapturedAt     time.Time  `json:"capturedAt"`
+	LastReadAt     *time.Time `json:"lastReadAt,omitempty"`
+	Width          int        `json:"width"`
+	Height         int        `json:"height"`
+	OriginalWidth  int        `json:"originalWidth,omitempty"`
+	OriginalHeight int        `json:"originalHeight,omitempty"`
+	Size           int64      `json:"size"`
+	Hash           string     `json:"hash"`
+	Selected       bool       `json:"selected"`
+	Source         string     `json:"source"` // clipboard | upload | wsl
+	Note           string     `json:"note,omitempty"`
 }
 
 // ClipboardList is the server's current clipboard image pool, newest first.
 type ClipboardList struct {
-	Paused   bool            `json:"paused"`
-	Compress bool            `json:"compress"`
-	MaxEdge  int             `json:"maxEdge"`
-	Max      int             `json:"max"`
-	Items    []ClipboardItem `json:"items"`
+	Paused       bool            `json:"paused"`
+	Compress     bool            `json:"compress"`
+	AutoUnselect bool            `json:"autoUnselect"`
+	MaxEdge      int             `json:"maxEdge"`
+	Max          int             `json:"max"`
+	Items        []ClipboardItem `json:"items"`
+}
+
+// ClipboardTextRequest sends plain UTF-8 text from WSL to the Windows clipboard.
+type ClipboardTextRequest struct {
+	Text string `json:"text"`
 }

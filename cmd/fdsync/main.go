@@ -102,10 +102,10 @@ func main() {
 		return
 	case "help", "--help", "-h":
 		if len(os.Args) > 2 && os.Args[2] == "clip" {
-			fmt.Print(clipHelpText)
+			_, _ = io.WriteString(os.Stdout, clipHelpText)
 			return
 		}
-		fmt.Print(usage)
+		_, _ = io.WriteString(os.Stdout, usage)
 		return
 	case "install-service":
 		installService()
@@ -213,7 +213,12 @@ func main() {
 	revoked := false
 	if creds != nil {
 		c.Device = creds.Device
-		c.Tokens = &client.TokenSource{Creds: creds, Path: *credPath, HTTP: hc, BaseURL: c.BaseURL}
+		var resolve func() string
+		if creds.ViaGateway {
+			resolve = func() string { return strings.TrimRight(creds.ServerURL(), "/") }
+			c.RefreshBaseURL = resolve
+		}
+		c.Tokens = &client.TokenSource{Creds: creds, Path: *credPath, HTTP: hc, BaseURL: c.BaseURL, RefreshBaseURL: resolve}
 		c.OnRevoked = func() {
 			revoked = true
 			log.Error("the server revoked this client: sync stopped. Pair again with: fdsync connect")

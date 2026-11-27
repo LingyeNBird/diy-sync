@@ -110,15 +110,23 @@ type refreshCall struct {
 // TokenSource hands out access tokens, refreshing them with the refresh
 // token (which rotates; the new one is saved at once).
 type TokenSource struct {
-	Creds   *Credentials
-	Path    string // where Creds are saved after a rotation
-	HTTP    *http.Client
-	BaseURL string
+	Creds          *Credentials
+	Path           string // where Creds are saved after a rotation
+	HTTP           *http.Client
+	BaseURL        string
+	RefreshBaseURL func() string // optional: re-reads WSL gateway when unreachable
 
 	mu       sync.Mutex
 	access   string
 	expires  time.Time
 	inflight *refreshCall
+}
+
+// SetBaseURL updates the server URL used for token refreshes.
+func (t *TokenSource) SetBaseURL(u string) {
+	t.mu.Lock()
+	t.BaseURL = u
+	t.mu.Unlock()
 }
 
 // Token returns a valid access token. Concurrent callers share a single
@@ -143,9 +151,17 @@ func (t *TokenSource) Token(ctx context.Context) (string, error) {
 	call := &refreshCall{done: make(chan struct{})}
 	t.inflight = call
 	refreshTok := t.Creds.RefreshToken
+	base := t.BaseURL
+	resolve := t.RefreshBaseURL
 	t.mu.Unlock()
 
-	tok, nextRefresh, exp, err := t.refresh(ctx, refreshTok)
+	tok, nextRefresh, exp, err := t.refresh(ctx, base, refreshTok)
+	if err != nil && resolve != nil {
+		if next := resolve(); next != "" && next != base {
+			t.SetBaseURL(next)
+			tok, nextRefresh, exp, err = t.refresh(ctx, next, refreshTok)
+		}
+	}
 
 	t.mu.Lock()
 	if err == nil {
@@ -166,11 +182,11 @@ func (t *TokenSource) Token(ctx context.Context) (string, error) {
 	return tok, err
 }
 
-func (t *TokenSource) refresh(ctx context.Context, refreshTok string) (access, nextRefresh string, expires time.Time, err error) {
+func (t *TokenSource) refresh(ctx context.Context, baseURL, refreshTok string) (access, nextRefresh string, expires time.Time, err error) {
 	body, _ := json.Marshal(protocol.RefreshRequest{RefreshToken: refreshTok})
 	rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(rctx, "POST", t.BaseURL+protocol.APIPrefix+"/token", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(rctx, "POST", baseURL+protocol.APIPrefix+"/token", bytes.NewReader(body))
 	if err != nil {
 		return "", "", time.Time{}, err
 	}

@@ -37,3 +37,19 @@ export function timestamp(iso: string): string {
 export function clock(iso: string): string {
   return format(new Date(iso), 'HH:mm:ss')
 }
+
+/** Reports whether semver a (X.Y.Z) is strictly newer than b. */
+export function isNewerVersion(a?: string, b?: string): boolean {
+  const parse = (v?: string) => {
+    const m = /^v?(\d+)\.(\d+)\.(\d+)$/.exec((v ?? '').trim())
+    return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null
+  }
+  const pa = parse(a)
+  if (!pa) return false // dev/unknown server build doesn't nag clients
+  const pb = parse(b)
+  if (!pb) return true
+  for (let i = 0; i < 3; i++) {
+    if (pa[i] !== pb[i]) return pa[i] > pb[i]
+  }
+  return false
+}

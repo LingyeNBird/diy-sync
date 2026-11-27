@@ -277,3 +277,35 @@ func TestClipboardResizeAndCompressToggle(t *testing.T) {
 		t.Fatalf("unexpected full-res metadata: %+v", full)
 	}
 }
+
+func TestEncodeDIBRoundTripAndAutoUnselect(t *testing.T) {
+	// encodeDIB → decodeDIB round-trip preserves pixel values.
+	src := image.NewNRGBA(image.Rect(0, 0, 3, 2))
+	src.SetNRGBA(0, 0, color.NRGBA{R: 10, G: 20, B: 30, A: 255})
+	src.SetNRGBA(2, 1, color.NRGBA{R: 200, G: 150, B: 50, A: 128})
+	dib := encodeDIB(src)
+	got, err := decodeDIB(dib)
+	if err != nil {
+		t.Fatalf("decodeDIB(encodeDIB): %v", err)
+	}
+	if got.NRGBAAt(0, 0) != src.NRGBAAt(0, 0) || got.NRGBAAt(2, 1) != src.NRGBAAt(2, 1) {
+		t.Fatalf("round-trip mismatch: got (%+v, %+v)", got.NRGBAAt(0, 0), got.NRGBAAt(2, 1))
+	}
+
+	// Config initialization + markRead + autoUnselect.
+	compOff := false
+	st := newClipboardStore(ClipboardConfig{Paused: true, Compress: &compOff, Max: 8, MaxEdge: 1024, AutoUnselect: true})
+	lst := st.list()
+	if !lst.Paused || lst.Compress || !lst.AutoUnselect || lst.Max != 8 || lst.MaxEdge != 1024 {
+		t.Fatalf("unexpected config init: %+v", lst)
+	}
+	it, added, err := st.addImage(makeTestPNG(t, 4, 4, color.NRGBA{R: 99, G: 88, B: 77, A: 255}), "upload", "check", true)
+	if err != nil || !added || !it.Selected {
+		t.Fatalf("add upload: %+v added=%v err=%v", it, added, err)
+	}
+	st.markRead(it.ID)
+	after, _, ok := st.get(it.ID)
+	if !ok || after.LastReadAt == nil || after.Selected {
+		t.Fatalf("after markRead with autoUnselect: %+v", after)
+	}
+}

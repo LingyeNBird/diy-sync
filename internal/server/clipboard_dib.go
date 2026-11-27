@@ -236,3 +236,31 @@ func extractMasked(v, mask uint32) uint8 {
 	}
 	return uint8((raw*255 + maxVal/2) / maxVal)
 }
+
+// encodeDIB encodes img into a 32-bit bottom-up BI_RGB CF_DIB payload suitable
+// for Windows SetClipboardData(CF_DIB).
+func encodeDIB(src image.Image) []byte {
+	nrgba := toNRGBA(src)
+	w, h := nrgba.Bounds().Dx(), nrgba.Bounds().Dy()
+	stride := w * 4
+	out := make([]byte, 40+stride*h)
+	binary.LittleEndian.PutUint32(out[0:4], 40)
+	binary.LittleEndian.PutUint32(out[4:8], uint32(int32(w)))
+	binary.LittleEndian.PutUint32(out[8:12], uint32(int32(h))) // bottom-up
+	binary.LittleEndian.PutUint16(out[12:14], 1)
+	binary.LittleEndian.PutUint16(out[14:16], 32)
+	binary.LittleEndian.PutUint32(out[16:20], biRGB)
+	binary.LittleEndian.PutUint32(out[20:24], uint32(stride*h))
+	for y := 0; y < h; y++ {
+		srcRow := nrgba.Pix[y*nrgba.Stride:]
+		dstRow := out[40+(h-1-y)*stride:]
+		for x := 0; x < w; x++ {
+			s := x * 4
+			dstRow[s+0] = srcRow[s+2] // B
+			dstRow[s+1] = srcRow[s+1] // G
+			dstRow[s+2] = srcRow[s+0] // R
+			dstRow[s+3] = srcRow[s+3] // A
+		}
+	}
+	return out
+}

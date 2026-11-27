@@ -98,7 +98,7 @@ func (c *Client) answer(ctx context.Context, r protocol.Request) {
 		}
 		return fmt.Errorf("unknown request %q", r.Kind)
 	}()
-	req, _ := http.NewRequestWithContext(ctx, "PUT", c.BaseURL+protocol.APIPrefix+"/requests/"+r.ID, bytes.NewReader(body))
+	req, _ := http.NewRequestWithContext(ctx, "PUT", c.getBaseURL()+protocol.APIPrefix+"/requests/"+r.ID, bytes.NewReader(body))
 	if err := c.authorize(ctx, req); err != nil {
 		return
 	}

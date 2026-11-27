@@ -145,6 +145,33 @@ func TestClipboardPanelAPIAndDaemonIPC(t *testing.T) {
 		t.Fatal("expected error for missing clipboard id over IPC")
 	}
 
+	// Reverse push: WSL → Windows image and text via daemon IPC.
+	img3 := solidPNG(t, 6, 6, color.NRGBA{R: 40, G: 40, B: 220, A: 255})
+	pushed, err := ipc.ClipboardPush(ctx, img3, "from wsl", true)
+	if err != nil || pushed.Source != "wsl" || pushed.Note != "from wsl" || pushed.Width != 6 {
+		t.Fatalf("ipc push: %+v err=%v", pushed, err)
+	}
+	if err := ipc.ClipboardPushText(ctx, "hello windows from wsl"); err != nil {
+		t.Fatalf("ipc push text: %v", err)
+	}
+
+	// AutoUnselect option + LastReadAt tracking when WSL reads an image.
+	if code, _, b := p.call("PUT", "/api/clipboard/options", map[string]any{"autoUnselect": true}, nil); code != 204 {
+		t.Fatalf("options: %d %s", code, b)
+	}
+	if _, err := ipc.ClipboardImage(ctx, it1.ID); err != nil {
+		t.Fatalf("read it1: %v", err)
+	}
+	afterRead, err := ipc.ClipboardList(ctx)
+	if err != nil || !afterRead.AutoUnselect {
+		t.Fatalf("list after read: %+v err=%v", afterRead, err)
+	}
+	for _, it := range afterRead.Items {
+		if it.ID == it1.ID && (it.LastReadAt == nil || it.Selected) {
+			t.Fatalf("it1 should have LastReadAt set and Selected auto-cleared: %+v", it)
+		}
+	}
+
 	// Clean shutdown removes the socket.
 	ipcCancel()
 	if err := <-ipcDone; err != nil {
@@ -162,7 +189,7 @@ func TestClipboardPanelAPIAndDaemonIPC(t *testing.T) {
 		t.Fatalf("delete: %d", code)
 	}
 	listAfter, err := cl.c.ClipboardList(ctx)
-	if err != nil || len(listAfter.Items) != 1 || listAfter.Items[0].Selected {
+	if err != nil || len(listAfter.Items) != 2 || listAfter.Items[0].Selected {
 		t.Fatalf("after unselect+delete: %+v err=%v", listAfter, err)
 	}
 	if code, _, _ := p.call("DELETE", "/api/clipboard", nil, nil); code != 204 {
@@ -171,5 +198,15 @@ func TestClipboardPanelAPIAndDaemonIPC(t *testing.T) {
 	listEmpty, err := cl.c.ClipboardList(ctx)
 	if err != nil || len(listEmpty.Items) != 0 {
 		t.Fatalf("after clear: %+v err=%v", listEmpty, err)
+	}
+
+	// Dynamic gateway refresh updates BaseURL after a connection failure.
+	cl.c.BaseURL = "http://127.0.0.1:1"
+	cl.c.RefreshBaseURL = func() string { return e.hs.URL }
+	if err := cl.c.Ping(ctx); err == nil {
+		t.Fatal("first call to dead port should fail and refresh BaseURL")
+	}
+	if err := cl.c.Ping(ctx); err != nil {
+		t.Fatalf("second call after RefreshBaseURL should succeed: %v", err)
 	}
 }

@@ -16,20 +16,22 @@ import (
 
 // trayText is the tray menu in the Windows display language (English or Chinese).
 type trayText struct {
-	open, pauseAll, resume, untilResumed, autostart, quit string
-	running, paused, pausedUntil, conflicts               string
-	minutes, hours                                        string
+	open, openClip, captureClip, pauseAll, resume, untilResumed, autostart, quit string
+	running, paused, pausedUntil, conflicts                                      string
+	minutes, hours                                                               string
 }
 
 var trayEN = trayText{
-	open: "Open panel", pauseAll: "Pause all", resume: "Resume now", untilResumed: "Until I resume",
+	open: "Open panel", openClip: "Open clipboard", captureClip: "Capture clipboard screenshots",
+	pauseAll: "Pause all", resume: "Resume now", untilResumed: "Until I resume",
 	autostart: "Start with Windows", quit: "Quit fdsync",
 	running: "Running · %d of %d connections online", paused: "Paused", pausedUntil: "Paused until %s",
 	conflicts: "%d conflicts", minutes: "For %d minutes", hours: "For %d hours",
 }
 
 var trayZH = trayText{
-	open: "打开面板", pauseAll: "全部暂停", resume: "立即恢复", untilResumed: "直到我手动恢复",
+	open: "打开面板", openClip: "打开剪贴板", captureClip: "自动记录剪贴板截图",
+	pauseAll: "全部暂停", resume: "立即恢复", untilResumed: "直到我手动恢复",
 	autostart: "开机时启动", quit: "退出 fdsync",
 	running: "运行中 · %d/%d 个连接在线", paused: "已暂停", pausedUntil: "已暂停至 %s",
 	conflicts: "%d 个冲突", minutes: "%d 分钟", hours: "%d 小时",
@@ -58,6 +60,9 @@ func runUI(_ context.Context, quit func(), srv *server.Server, panelURL string, 
 		status.Disable()
 		systray.AddSeparator()
 		open := systray.AddMenuItem(tx.open, "")
+		openClip := systray.AddMenuItem(tx.openClip, "")
+		captureClip := systray.AddMenuItemCheckbox(tx.captureClip, "", !srv.Status().ClipboardPaused)
+		systray.AddSeparator()
 		pause := systray.AddMenuItem(tx.pauseAll, "")
 		durations := []int{10, 30, 60, 120}
 		var pauseFor []*systray.MenuItem
@@ -96,6 +101,11 @@ func runUI(_ context.Context, quit func(), srv *server.Server, panelURL string, 
 			if st.Conflicts > 0 {
 				line += " · " + fmt.Sprintf(tx.conflicts, st.Conflicts)
 			}
+			if st.ClipboardPaused {
+				captureClip.Uncheck()
+			} else {
+				captureClip.Check()
+			}
 			status.SetTitle(line)
 			systray.SetTooltip("fdsync — " + line)
 			systray.SetIcon(trayIcon(kind, st.Conflicts > 0))
@@ -120,6 +130,12 @@ func runUI(_ context.Context, quit func(), srv *server.Server, panelURL string, 
 					}
 				case <-open.ClickedCh:
 					openBrowser(panelURL)
+				case <-openClip.ClickedCh:
+					openBrowser(strings.TrimRight(panelURL, "/") + "/clipboard")
+				case <-captureClip.ClickedCh:
+					wantCapture := !captureClip.Checked()
+					srv.SetClipboardPaused(!wantCapture)
+					update()
 				case <-pauseForever.ClickedCh:
 					srv.SetPauseAll(true, time.Time{}, false)
 					update()

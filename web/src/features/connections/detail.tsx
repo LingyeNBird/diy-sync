@@ -1,6 +1,7 @@
 import { useDeferredValue, useMemo, useState } from 'react'
 import { Link, useNavigate } from '@tanstack/react-router'
 import {
+  ArrowUpCircle,
   Ban,
   ChevronRight,
   Columns2,
@@ -20,11 +21,12 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { usePageState } from '@/lib/page-state'
-import { ago, formatCount } from '@/lib/format'
+import { ago, formatCount, isNewerVersion } from '@/lib/format'
 import { annotate, type AnnotatedNode } from '@/lib/status'
 import type { Binding, Connection, ItemStatus, SyncFolder } from '@/lib/types'
 import { api } from '@/api/client'
 import { useTree, useData } from '@/api/data'
+import { copyText } from '@/features/browser/rows'
 import {
   Dialog,
   DialogContent,
@@ -54,7 +56,7 @@ import { NewBindingDialog } from './new-binding-dialog'
 
 export function ConnectionDetail({ connectionId }: { connectionId: string }) {
   const { t } = useTranslation()
-  const { connections, folders, bindings, revoke: revokeConn } = useData()
+  const { server, connections, folders, bindings, revoke: revokeConn } = useData()
   const navigate = useNavigate()
   const conn = connections.find((c) => c.id === connectionId)
   const bs = bindings.filter((b) => b.connectionId === connectionId)
@@ -96,6 +98,17 @@ export function ConnectionDetail({ connectionId }: { connectionId: string }) {
       }
       actions={
         <>
+          {isNewerVersion(server?.version, conn.version) && server?.version && (
+            <Button
+              variant='outline'
+              size='sm'
+              className='border-sky-500/40 text-sky-600 hover:bg-sky-500/10 dark:text-sky-400'
+              onClick={() => void copyText('fdsync upgrade').then(() => toast.success(t('connections.upgradeCopied')))}
+              title={t('connections.upgradeCopy')}
+            >
+              <ArrowUpCircle /> {t('connections.updateAvailable', { version: server.version })}
+            </Button>
+          )}
           <Button variant='outline' size='sm' asChild>
             <Link to='/browse' search={{ connection: conn.id, binding: active }}>
               <Columns2 /> {t('connection.openBrowser')}

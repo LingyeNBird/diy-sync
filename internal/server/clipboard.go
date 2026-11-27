@@ -22,13 +22,27 @@ import (
 
 const (
 	defaultClipboardMax     = 20        // max unselected images kept in memory
+	minClipboardMax         = 5
+	maxClipboardMax         = 100
 	maxClipboardSelected    = 50        // hard cap on selected/pinned images
 	maxClipboardImageBytes  = 25 << 20  // 25 MiB per compressed image
 	maxClipboardRawDIBBytes = 128 << 20 // 128 MiB for uncompressed Windows DIBs (e.g. dual-4K)
+	maxClipboardTextBytes   = 4 << 20   // 4 MiB for WSL -> Windows clipboard text
 	defaultClipboardMaxEdge = 2048      // longest edge when proportional resize is enabled
+	minClipboardMaxEdge     = 512
+	maxClipboardMaxEdge     = 8192
 	maxClipboardPixels      = 64_000_000
 	maxClipboardNoteRunes   = 120
 )
+
+// ClipboardConfig persists clipboard preferences in config.json.
+type ClipboardConfig struct {
+	Paused       bool  `json:"paused,omitempty"`
+	Compress     *bool `json:"compress,omitempty"` // default true
+	Max          int   `json:"max,omitempty"`      // default 20
+	MaxEdge      int   `json:"maxEdge,omitempty"`  // default 2048
+	AutoUnselect bool  `json:"autoUnselect,omitempty"`
+}
 
 type clipboardEntry struct {
 	protocol.ClipboardItem
@@ -36,7 +50,7 @@ type clipboardEntry struct {
 	pixelHash string
 }
 
-// clipboardStore keeps recent Windows clipboard screenshots (and panel-uploaded
+// clipboardStore keeps recent Windows clipboard screenshots (and panel/WSL
 // images) in memory only. Selected items are protected from automatic eviction
 // when newer screenshots arrive.
 type clipboardStore struct {
@@ -45,17 +59,50 @@ type clipboardStore struct {
 	maxSelected   int
 	maxEdge       int
 	compress      bool
+	autoUnselect  bool
 	paused        bool
 	seq           uint64
 	items         []*clipboardEntry // newest first
 }
 
-func newClipboardStore() *clipboardStore {
-	return &clipboardStore{
+func newClipboardStore(cfg ...ClipboardConfig) *clipboardStore {
+	s := &clipboardStore{
 		maxUnselected: defaultClipboardMax,
 		maxSelected:   maxClipboardSelected,
 		maxEdge:       defaultClipboardMaxEdge,
 		compress:      true,
+	}
+	if len(cfg) > 0 {
+		c := cfg[0]
+		s.paused = c.Paused
+		if c.Compress != nil {
+			s.compress = *c.Compress
+		}
+		if c.Max > 0 {
+			s.maxUnselected = clampInt(c.Max, minClipboardMax, maxClipboardMax)
+		}
+		if c.MaxEdge > 0 {
+			s.maxEdge = clampInt(c.MaxEdge, minClipboardMaxEdge, maxClipboardMaxEdge)
+		}
+		s.autoUnselect = c.AutoUnselect
+	}
+	return s
+}
+
+func clampInt(v, lo, hi int) int {
+	return min(max(v, lo), hi)
+}
+
+func (c *clipboardStore) configSnapshot() ClipboardConfig {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	comp := c.compress
+	return ClipboardConfig{
+		Paused:       c.paused,
+		Compress:     &comp,
+		Max:          c.maxUnselected,
+		MaxEdge:      c.maxEdge,
+		AutoUnselect: c.autoUnselect,
 	}
 }
 
@@ -81,6 +128,41 @@ func (c *clipboardStore) setCompress(on bool) {
 	c.mu.Lock()
 	c.compress = on
 	c.mu.Unlock()
+}
+
+func (c *clipboardStore) setOptions(compress, autoUnselect *bool, maxItems, maxEdge *int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if compress != nil {
+		c.compress = *compress
+	}
+	if autoUnselect != nil {
+		c.autoUnselect = *autoUnselect
+	}
+	if maxItems != nil && *maxItems > 0 {
+		c.maxUnselected = clampInt(*maxItems, minClipboardMax, maxClipboardMax)
+		c.evictLocked()
+	}
+	if maxEdge != nil && *maxEdge > 0 {
+		c.maxEdge = clampInt(*maxEdge, minClipboardMaxEdge, maxClipboardMaxEdge)
+	}
+}
+
+// markRead records that a WSL client fetched this image and clears its
+// Selected flag when autoUnselect is enabled.
+func (c *clipboardStore) markRead(id string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, it := range c.items {
+		if it.ID == id {
+			now := time.Now()
+			it.LastReadAt = &now
+			if c.autoUnselect && it.Selected {
+				it.Selected = false
+			}
+			return
+		}
+	}
 }
 
 func encodePNG(img image.Image, best bool) ([]byte, error) {
@@ -197,7 +279,7 @@ func (c *clipboardStore) addDecoded(img image.Image, pngBytes []byte, origW, ori
 			continue
 		}
 		if i == 0 {
-			if source == "upload" {
+			if source != "clipboard" {
 				if selectIt && !existing.Selected {
 					if c.selectedCountLocked() < c.maxSelected {
 						existing.Selected = true
@@ -205,6 +287,10 @@ func (c *clipboardStore) addDecoded(img image.Image, pngBytes []byte, origW, ori
 				}
 				if note != "" {
 					existing.Note = note
+				}
+				if source == "wsl" {
+					existing.Source = "wsl"
+					existing.CapturedAt = time.Now()
 				}
 			}
 			return existing.ClipboardItem, false, nil
@@ -284,11 +370,12 @@ func (c *clipboardStore) list() protocol.ClipboardList {
 		out[i] = it.ClipboardItem
 	}
 	return protocol.ClipboardList{
-		Paused:   c.paused,
-		Compress: c.compress,
-		MaxEdge:  c.maxEdge,
-		Max:      c.maxUnselected,
-		Items:    out,
+		Paused:       c.paused,
+		Compress:     c.compress,
+		AutoUnselect: c.autoUnselect,
+		MaxEdge:      c.maxEdge,
+		Max:          c.maxUnselected,
+		Items:        out,
 	}
 }
 

@@ -61,8 +61,9 @@ type Config struct {
 	// 50; 0 turns it off).
 	TrashMB *int `json:"trashMB,omitempty"`
 	// PauseAll pauses every folder, until PausedUntil (zero = until resumed).
-	PauseAll    bool      `json:"pauseAll,omitempty"`
-	PausedUntil time.Time `json:"pausedUntil,omitzero"`
+	PauseAll    bool            `json:"pauseAll,omitempty"`
+	PausedUntil time.Time       `json:"pausedUntil,omitzero"`
+	Clipboard   ClipboardConfig `json:"clipboard,omitzero"`
 
 	// Not stored in the file.
 	// Autostart starts the server at Windows login (nil = not supported here).
@@ -93,6 +94,7 @@ type Server struct {
 	upd     updates
 	pair    *pairing
 	clip    *clipboardStore
+	clipWin *winClipboardBridge
 	cert    tls.Certificate
 	fp      string // certificate fingerprint, "" without TLS
 
@@ -132,7 +134,8 @@ func New(cfg Config, log *slog.Logger) (*Server, error) {
 		ev: ev, reg: newRegistry(cfg.DataDir, ev), broker: newBroker()}
 	s.panel = newPanelAuth(s)
 	s.pair = newPairing()
-	s.clip = newClipboardStore()
+	s.clip = newClipboardStore(cfg.Clipboard)
+	s.clipWin = newWinClipboardBridge()
 	if !cfg.PlainHTTP && cfg.DataDir != "" {
 		if s.cert, s.fp, err = LoadOrCreateCert(cfg.DataDir); err != nil {
 			return nil, fmt.Errorf("certificate: %w", err)
@@ -346,7 +349,7 @@ func (s *Server) Watch(ctx context.Context) {
 	for _, f := range s.folderList() {
 		go s.watchFolder(ctx, f)
 	}
-	startClipboardWatch(ctx, s.clip, s.log)
+	s.clipWin.start(ctx, s.clip, s.log)
 	go func() { // the size cap holds on every write; this drops week-old entries
 		t := time.NewTicker(time.Hour)
 		defer t.Stop()
@@ -421,6 +424,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT "+p+"/requests/{rid}", s.handleAnswer)
 	mux.HandleFunc("GET "+p+"/clipboard", s.handleClipboardList)
 	mux.HandleFunc("GET "+p+"/clipboard/{id}", s.handleClipboardImage)
+	mux.HandleFunc("POST "+p+"/clipboard", s.handleClipboardPush)
+	mux.HandleFunc("POST "+p+"/clipboard/text", s.handleClipboardPushText)
 	authed := s.auth(mux)
 	// Pairing and token refresh are how a client gets credentials: no auth.
 	open := http.NewServeMux()

@@ -1,14 +1,18 @@
-// Clipboard: in-memory Windows screenshots & manually added images for WSL / AI.
-// Users can inspect thumbnails/full previews, delete sensitive captures, pin
-// ("Select for AI") specific images, attach short notes, or pause capture.
+// Clipboard: in-memory Windows screenshots, panel uploads & WSL-pushed images.
+// Users can inspect thumbnails/full previews (with keyboard shortcuts), delete
+// sensitive captures, pin ("Select for AI") specific images, attach short notes,
+// toggle auto-capture / proportional resize / auto-unselect, or copy the AI Skill.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Check,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   ChevronUp,
   Copy,
   Download,
+  Eye,
   ImagePlus,
   Images,
   Loader2,
@@ -43,14 +47,14 @@ const DIRECT_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif'])
 
 const SKILL_TEMPLATE_EN = `---
 name: fdsync-clipboard
-description: Read screenshots and images captured from the Windows clipboard (or selected in the fdsync Windows panel) into WSL via \`fdsync clip\`. Use whenever the user asks to view, inspect, compare, or analyze their latest screenshot(s), clipboard image(s), or panel-selected image(s).
+description: Exchange screenshots and clipboard content between Windows and WSL via \`fdsync clip\`. Use whenever the user asks to view, inspect, compare, or analyze their latest Windows screenshot(s) or panel-selected image(s), or asks to send an image/text back to Windows.
 ---
 
-# Reading Windows Screenshots via \`fdsync clip\`
+# Exchanging Screenshots via \`fdsync clip\`
 
-Run \`fdsync clip\` in WSL to download PNG images from the Windows \`fdsync-server\` into \`/tmp/fdsync-clip/\`, then read the returned file paths directly with your image/file reading tool.
+Run \`fdsync clip\` in WSL to download PNG images from Windows into \`/tmp/fdsync-clip/\` (then read the paths directly), or push generated images/text back to Windows.
 
-## Command Mapping
+## Reading from Windows
 
 - User asks to inspect their screenshot or selected image(s) without giving a count:
   \`\`\`bash
@@ -62,59 +66,80 @@ Run \`fdsync clip\` in WSL to download PNG images from the Windows \`fdsync-serv
   \`\`\`bash
   fdsync clip --latest 2 --json
   \`\`\`
-  Ignores panel selection and always downloads the newest N screenshots.
 
-- User asks what screenshots are available or wants to pick by ID:
+- List available screenshots or fetch specific IDs:
   \`\`\`bash
   fdsync clip list --json
   fdsync clip get --json <id1> <id2>
+  \`\`\`
+
+## Sending Back to Windows
+
+- Push a generated image (PNG/JPEG/GIF) to Windows (copies to Windows clipboard and shows a clickable notification that opens the default image viewer):
+  \`\`\`bash
+  fdsync clip push /path/to/image.png --note "result"
+  \`\`\`
+- Copy text to the Windows clipboard:
+  \`\`\`bash
+  printf '%s' "text" | fdsync clip copy
   \`\`\`
 
 ## Handling Results
 
 1. Read every local path in \`files[].path\` in parallel.
-2. Pay attention to each item's \`note\` (optional label set by the user in the panel) and \`capturedAt\` timestamp.
-3. If \`mode\` is \`"selected"\` and \`newerUnselected > 0\`, mention briefly that newer unselected screenshots exist on Windows in case an older selection was left checked.
-4. Keep screenshots in \`/tmp/fdsync-clip/\`; do not copy them into the project repository.
-5. Run \`fdsync clip help\` if you need the full CLI reference.
+2. Pay attention to each item's \`note\` and \`capturedAt\` timestamp.
+3. If \`mode\` is \`"selected"\` and \`newerUnselected > 0\`, mention briefly that newer unselected screenshots exist on Windows.
+4. If \`originalWidth\`/\`originalHeight\` are present and tiny text is hard to read, let the user know they can crop closer or disable Auto-resize in the panel.
+5. Keep screenshots in \`/tmp/fdsync-clip/\`; do not copy them into the project repository.
+6. Run \`fdsync clip help\` for the full CLI reference.
 `
 
 const SKILL_TEMPLATE_ZH = `---
 name: fdsync-clipboard
-description: 通过 \`fdsync clip\` 在 WSL 中读取 Windows 剪贴板自动捕获的截图或在 fdsync 面板中指定的图片。当用户说“看看我刚截的图”“读一下最新的两张截图”“看看我指定的图片”或对比截图时使用。
+description: 通过 \`fdsync clip\` 在 Windows 与 WSL 之间收发截图和剪贴板内容。当用户说“看看我刚截的图”“读一下最新的两张截图”“看看我指定的图片”或要把 WSL 里生成的图片/文本发回 Windows 时使用。
 ---
 
-# 通过 \`fdsync clip\` 读取 Windows 截图
+# 通过 \`fdsync clip\` 收发 Windows 截图
 
-在 WSL 中运行 \`fdsync clip\` 从 Windows 端的 \`fdsync-server\` 按需拉取 PNG 图片到 \`/tmp/fdsync-clip/\`，再用文件/图片读取工具直接读取返回的路径。
+在 WSL 中运行 \`fdsync clip\` 从 Windows 端按需拉取 PNG 到 \`/tmp/fdsync-clip/\` 后直接读取，也可以把 WSL 生成的图片或文本发回 Windows。
 
-## 指令映射
+## 读取 Windows 截图
 
 - 用户没说具体数量（如“看看我刚截的图”“读一下我指定的图片”）：
   \`\`\`bash
   fdsync clip --json
   \`\`\`
-  如果 Windows 面板里有勾选「指定给 AI」的图片，会自动拉取这些指定图片；否则默认拉取最新 1 张。
+  若 Windows 面板里有勾选「指定给 AI」的图片，自动拉取这些指定图片；否则默认拉取最新 1 张。
 
 - 用户明确说了最新几张（如“读一下我最新截取的这两张图片”）：
   \`\`\`bash
   fdsync clip --latest 2 --json
   \`\`\`
-  无视面板勾选状态，强制拉取最新 N 张截图。
 
-- 用户想先看清单或按 ID 指定：
+- 查看清单或按 ID 指定：
   \`\`\`bash
   fdsync clip list --json
   fdsync clip get --json <id1> <id2>
   \`\`\`
 
-## 读取与注意事项
+## 反向发送到 Windows
+
+- 发送 WSL 里的图片到 Windows（自动写入 Windows 剪贴板并弹出系统通知，点击通知直接用默认图片工具打开）：
+  \`\`\`bash
+  fdsync clip push /path/to/image.png --note "结果图"
+  \`\`\`
+- 把文本直接复制到 Windows 剪贴板：
+  \`\`\`bash
+  printf '%s' "内容" | fdsync clip copy
+  \`\`\`
+
+## 注意事项
 
 1. 解析 JSON 中的 \`files[].path\`，并行读取全部下载下来的 PNG 图片。
-2. 留意每张图的 \`note\`（用户在面板中填写的备注，如“设计稿”“报错”）以及 \`capturedAt\` 时间。
-3. 若返回中 \`mode\` 为 \`"selected"\` 且 \`newerUnselected > 0\`，说明 Windows 端有比已指定图片更新的截图，分析时可顺带提醒用户确认是否忘了取消旧的勾选。
-4. 仅从临时目录 \`/tmp/fdsync-clip/\` 读取，不要把截图复制到项目代码仓库中。
-5. 如需查看完整 CLI 参数与说明，运行 \`fdsync clip help\`。
+2. 留意每张图的 \`note\`（面板备注）以及 \`capturedAt\` 时间。
+3. 若返回中 \`mode\` 为 \`"selected"\` 且 \`newerUnselected > 0\`，顺带提醒用户 Windows 端有更新的未指定截图。
+4. 若存在 \`originalWidth\`/\`originalHeight\` 且小字模糊，可提醒用户局部放大截取或在面板关闭大图缩放。
+5. 仅从 \`/tmp/fdsync-clip/\` 读取，不要把截图复制到项目代码仓库中；完整参考运行 \`fdsync clip help\`。
 `
 
 /** Converts browser-supported images (e.g. WebP/BMP) to PNG when needed. */
@@ -162,11 +187,13 @@ export function Clipboard() {
   const items = useMemo(() => list.data?.items ?? [], [list.data?.items])
   const paused = list.data?.paused ?? false
   const compress = list.data?.compress ?? true
+  const autoUnselect = list.data?.autoUnselect ?? false
   const maxEdge = list.data?.maxEdge ?? 2048
   const maxItems = list.data?.max ?? 20
   const selectedCount = useMemo(() => items.filter((it) => it.selected).length, [items])
   const visible = useMemo(() => (filter === 'selected' ? items.filter((it) => it.selected) : items), [items, filter])
-  const preview = useMemo(() => items.find((it) => it.id === previewId), [items, previewId])
+  const previewIndex = useMemo(() => (previewId ? visible.findIndex((it) => it.id === previewId) : -1), [visible, previewId])
+  const preview = previewIndex >= 0 ? visible[previewIndex] : items.find((it) => it.id === previewId)
 
   const invalidate = useCallback(() => {
     void qc.invalidateQueries({ queryKey: ['clipboard'] })
@@ -201,6 +228,36 @@ export function Clipboard() {
     [invalidate, onError, t]
   )
 
+  const toggleSelect = useCallback(
+    async (item: ClipboardItem) => {
+      try {
+        await api<ClipboardItem>('PATCH', `/api/clipboard/${encodeURIComponent(item.id)}`, { selected: !item.selected })
+        invalidate()
+      } catch (e) {
+        onError(e)
+      }
+    },
+    [invalidate, onError]
+  )
+
+  const removeItem = useCallback(
+    async (id: string) => {
+      try {
+        await api('DELETE', `/api/clipboard/${encodeURIComponent(id)}`)
+        if (previewId === id) {
+          const idx = visible.findIndex((x) => x.id === id)
+          const next = visible[idx + 1] ?? visible[idx - 1]
+          setPreviewId(next?.id)
+        }
+        invalidate()
+        toast.success(t('clipboard.deleted'))
+      } catch (e) {
+        onError(e)
+      }
+    },
+    [invalidate, onError, previewId, t, visible]
+  )
+
   // Allow pasting an image directly into the Clipboard panel with Ctrl+V.
   useEffect(() => {
     const onPaste = (e: ClipboardEvent) => {
@@ -215,31 +272,35 @@ export function Clipboard() {
     return () => window.removeEventListener('paste', onPaste)
   }, [uploadFiles])
 
-  const toggleSelect = async (item: ClipboardItem) => {
-    try {
-      await api<ClipboardItem>('PATCH', `/api/clipboard/${encodeURIComponent(item.id)}`, { selected: !item.selected })
-      invalidate()
-    } catch (e) {
-      onError(e)
+  // Keyboard shortcuts inside the full-size preview lightbox: ← → Space Delete.
+  useEffect(() => {
+    if (!preview) return
+    const onKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return
+      if (e.key === 'ArrowLeft' && previewIndex > 0) {
+        e.preventDefault()
+        setPreviewId(visible[previewIndex - 1].id)
+      } else if (e.key === 'ArrowRight' && previewIndex >= 0 && previewIndex < visible.length - 1) {
+        e.preventDefault()
+        setPreviewId(visible[previewIndex + 1].id)
+      } else if (e.key === ' ') {
+        e.preventDefault()
+        void toggleSelect(preview)
+      } else if (e.key === 'Delete') {
+        e.preventDefault()
+        void removeItem(preview.id)
+      }
     }
-  }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [preview, previewIndex, removeItem, toggleSelect, visible])
 
   const saveNote = async (id: string, note: string) => {
     try {
       await api<ClipboardItem>('PATCH', `/api/clipboard/${encodeURIComponent(id)}`, { note })
       setEditingNoteId(undefined)
       invalidate()
-    } catch (e) {
-      onError(e)
-    }
-  }
-
-  const removeItem = async (id: string) => {
-    try {
-      await api('DELETE', `/api/clipboard/${encodeURIComponent(id)}`)
-      if (previewId === id) setPreviewId(undefined)
-      invalidate()
-      toast.success(t('clipboard.deleted'))
     } catch (e) {
       onError(e)
     }
@@ -290,6 +351,16 @@ export function Clipboard() {
     }
   }
 
+  const setAutoUnselectMode = async (nextOn: boolean) => {
+    try {
+      await api('PUT', '/api/clipboard/options', { autoUnselect: nextOn })
+      invalidate()
+      toast.success(nextOn ? t('clipboard.autoUnselectOn') : t('clipboard.autoUnselectOff'))
+    } catch (e) {
+      onError(e)
+    }
+  }
+
   const copyCommand = (cmd: string) => {
     void navigator.clipboard?.writeText(cmd)
     setCopiedCmd(cmd)
@@ -306,6 +377,12 @@ export function Clipboard() {
   const startEditNote = (item: ClipboardItem) => {
     setEditingNoteId(item.id)
     setNoteDraft(item.note ?? '')
+  }
+
+  const sourceLabel = (src: ClipboardItem['source']) => {
+    if (src === 'wsl') return t('clipboard.sourceWsl')
+    if (src === 'upload') return t('clipboard.sourceUpload')
+    return t('clipboard.sourceClipboard')
   }
 
   return (
@@ -329,6 +406,17 @@ export function Clipboard() {
               aria-label={t('clipboard.compress', { edge: maxEdge })}
             />
             <span>{t('clipboard.compress', { edge: maxEdge })}</span>
+          </label>
+          <label
+            className='flex cursor-pointer items-center gap-2 rounded-md border bg-card px-3 py-1.5 text-sm'
+            title={t('clipboard.autoUnselectHint')}
+          >
+            <Switch
+              checked={autoUnselect}
+              onCheckedChange={(on) => void setAutoUnselectMode(on)}
+              aria-label={t('clipboard.autoUnselect')}
+            />
+            <span>{t('clipboard.autoUnselect')}</span>
           </label>
           <input
             ref={fileInput}
@@ -475,9 +563,27 @@ export function Clipboard() {
                   <div className='flex flex-1 flex-col gap-2 p-3'>
                     <div className='flex items-center justify-between gap-2 text-xs'>
                       <span className='font-mono text-muted-foreground'>{item.id}</span>
-                      <Badge variant='outline' className='h-5 px-1.5 text-[10px] font-normal'>
-                        {item.source === 'upload' ? t('clipboard.sourceUpload') : t('clipboard.sourceClipboard')}
-                      </Badge>
+                      <div className='flex items-center gap-1'>
+                        {item.lastReadAt && (
+                          <Badge
+                            variant='secondary'
+                            className='h-5 gap-1 px-1.5 text-[10px] font-normal text-emerald-700 dark:text-emerald-300'
+                            title={timestamp(item.lastReadAt)}
+                          >
+                            <Eye className='size-3' />
+                            {t('clipboard.readByAi', { ago: ago(item.lastReadAt) })}
+                          </Badge>
+                        )}
+                        <Badge
+                          variant='outline'
+                          className={cn(
+                            'h-5 px-1.5 text-[10px] font-normal',
+                            item.source === 'wsl' && 'border-sky-500/40 text-sky-600 dark:text-sky-400'
+                          )}
+                        >
+                          {sourceLabel(item.source)}
+                        </Badge>
+                      </div>
                     </div>
                     <div className='flex items-center justify-between gap-2 text-xs text-muted-foreground tabular-nums'>
                       <span
@@ -546,11 +652,13 @@ export function Clipboard() {
             <Terminal className='size-4 text-muted-foreground' />
             <span>{t('clipboard.cliTitle')}</span>
           </div>
-          <div className='grid gap-2 sm:grid-cols-2 lg:grid-cols-4'>
+          <div className='grid gap-2 sm:grid-cols-2 lg:grid-cols-3'>
             {[
               { cmd: 'fdsync clip', desc: t('clipboard.cliDefault') },
               { cmd: 'fdsync clip --latest 2', desc: t('clipboard.cliLatest') },
               { cmd: 'fdsync clip list', desc: t('clipboard.cliList') },
+              { cmd: 'fdsync clip push image.png', desc: t('clipboard.cliPush') },
+              { cmd: 'echo "hi" | fdsync clip copy', desc: t('clipboard.cliCopy') },
               { cmd: 'fdsync clip help', desc: t('clipboard.cliHelp') },
             ].map((row) => (
               <div key={row.cmd} className='flex items-start justify-between gap-2 rounded-md border bg-background px-3 py-2'>
@@ -600,15 +708,26 @@ export function Clipboard() {
         </div>
       </div>
 
-      {/* Full-size preview lightbox */}
+      {/* Full-size preview lightbox with keyboard navigation */}
       <Dialog open={!!preview} onOpenChange={(open) => !open && setPreviewId(undefined)}>
         <DialogContent className='sm:max-w-4xl'>
           {preview && (
             <>
               <DialogHeader>
-                <DialogTitle className='flex items-center gap-2 font-mono text-base'>
+                <DialogTitle className='flex flex-wrap items-center gap-2 font-mono text-base'>
                   <span>{preview.id}</span>
+                  {previewIndex >= 0 && (
+                    <span className='text-xs font-normal text-muted-foreground tabular-nums'>
+                      ({previewIndex + 1} / {visible.length})
+                    </span>
+                  )}
                   {preview.selected && <Badge>{t('clipboard.selectedForAi')}</Badge>}
+                  {preview.lastReadAt && (
+                    <Badge variant='secondary' className='gap-1 font-sans text-xs font-normal text-emerald-700 dark:text-emerald-300'>
+                      <Eye className='size-3' />
+                      {t('clipboard.readByAi', { ago: ago(preview.lastReadAt) })}
+                    </Badge>
+                  )}
                 </DialogTitle>
                 <DialogDescription className='tabular-nums'>
                   {preview.width} × {preview.height}
@@ -616,14 +735,37 @@ export function Clipboard() {
                     ? ` (${t('clipboard.resizedFrom', { w: preview.originalWidth, h: preview.originalHeight })})`
                     : ''}{' '}
                   · {formatBytes(preview.size)} · {timestamp(preview.capturedAt)}
+                  {preview.note ? ` · ${preview.note}` : ''}
                 </DialogDescription>
               </DialogHeader>
-              <div className='flex max-h-[65vh] items-center justify-center overflow-auto rounded-lg border bg-muted/40 p-3'>
+              <div className='relative flex max-h-[65vh] items-center justify-center overflow-auto rounded-lg border bg-muted/40 p-3'>
+                {previewIndex > 0 && (
+                  <Button
+                    size='icon'
+                    variant='secondary'
+                    className='absolute start-2 top-1/2 z-10 size-8 -translate-y-1/2 opacity-85 shadow-sm'
+                    onClick={() => setPreviewId(visible[previewIndex - 1].id)}
+                    aria-label={t('clipboard.prev')}
+                  >
+                    <ChevronLeft className='size-4' />
+                  </Button>
+                )}
                 <img
                   src={`/api/clipboard/${encodeURIComponent(preview.id)}?h=${preview.hash}`}
                   alt={preview.note || preview.id}
                   className='max-h-[60vh] max-w-full rounded object-contain'
                 />
+                {previewIndex >= 0 && previewIndex < visible.length - 1 && (
+                  <Button
+                    size='icon'
+                    variant='secondary'
+                    className='absolute end-2 top-1/2 z-10 size-8 -translate-y-1/2 opacity-85 shadow-sm'
+                    onClick={() => setPreviewId(visible[previewIndex + 1].id)}
+                    aria-label={t('clipboard.next')}
+                  >
+                    <ChevronRight className='size-4' />
+                  </Button>
+                )}
               </div>
               <div className='flex flex-wrap items-center justify-between gap-2'>
                 <div className='flex flex-wrap items-center gap-2'>
@@ -641,6 +783,7 @@ export function Clipboard() {
                     </a>
                   </Button>
                 </div>
+                <span className='hidden text-xs text-muted-foreground sm:inline'>{t('clipboard.lightboxKeys')}</span>
                 <Button size='sm' variant='destructive' onClick={() => void removeItem(preview.id)}>
                   <Trash2 /> {t('clipboard.remove')}
                 </Button>

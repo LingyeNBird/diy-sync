@@ -18,12 +18,14 @@ import (
 	"fdsync/internal/protocol"
 )
 
-const clipHelpText = `fdsync clip — fetch Windows clipboard screenshots into WSL
+const clipHelpText = `fdsync clip — exchange screenshots & clipboard content between Windows and WSL
 
 USAGE
-  fdsync clip [get] [flags] [ID...]   download screenshots to a local folder and print paths
-  fdsync clip list  [flags]           list available screenshots and metadata without downloading
-  fdsync clip help                    show this guide (for humans and AI assistants)
+  fdsync clip [get]  [flags] [ID...]      download Windows screenshots to a local folder
+  fdsync clip list   [flags]              list available screenshots and metadata
+  fdsync clip push   [flags] <FILE | ->   send an image from WSL to Windows (clipboard + notification)
+  fdsync clip copy   [flags] [TEXT...]    copy UTF-8 text (or stdin) from WSL to Windows clipboard
+  fdsync clip help                        show this guide (for humans and AI assistants)
 
 GUIDE FOR AI ASSISTANTS
   When the user asks you to inspect Windows screenshots or clipboard images:
@@ -57,7 +59,14 @@ GUIDE FOR AI ASSISTANTS
        Windows that were not selected in the panel. Mention this briefly in case the
        user forgot to clear an earlier selection.
 
-  4. Privacy & workspace hygiene:
+  4. Sending an image or text back to Windows (reverse direction):
+     • Send a generated PNG/JPEG/GIF image to Windows (copies to Windows clipboard
+       and pops a clickable Windows notification that opens the image viewer):
+         fdsync clip push /path/to/chart.png --note "benchmark"
+     • Copy text from WSL to the Windows clipboard:
+         printf '%s' "some text" | fdsync clip copy
+
+  5. Privacy & workspace hygiene:
      • Read images directly from their temporary output directory (/tmp/fdsync-clip by
        default). Do not copy user screenshots into the project repository.
 
@@ -69,15 +78,22 @@ FLAGS (for get / default)
   --keep             keep previous PNG files in the default output directory
   --json             print structured JSON (recommended for scripts and AI tools)
 
+FLAGS (for push)
+  --note TEXT        optional short label shown in the notification and panel
+  --no-copy          do not overwrite the Windows clipboard (only add to panel + notify)
+  --json             print the created item as JSON
+
 FLAGS (common)
   --data-dir DIR     fdsync state directory (reuses daemon.sock if daemon is running)
   --credentials FILE credentials file saved by fdsync connect
 `
 
 const clipUsage = `Usage:
-  fdsync clip [get] [flags] [ID...]   download Windows clipboard screenshots to a local folder
-  fdsync clip list  [flags]           list available clipboard screenshots on Windows
-  fdsync clip help                    show detailed usage & AI assistant guide
+  fdsync clip [get]  [flags] [ID...]      download Windows screenshots to a local folder
+  fdsync clip list   [flags]              list available screenshots on Windows
+  fdsync clip push   [flags] <FILE | ->   send an image from WSL to Windows (notifies & copies)
+  fdsync clip copy   [flags] [TEXT...]    copy text (or stdin) from WSL to Windows clipboard
+  fdsync clip help                        show detailed usage & AI assistant guide
 
 Flags:
 `
@@ -157,8 +173,14 @@ func clip(args []string) {
 		case "get":
 			sub = "get"
 			args = args[1:]
+		case "push", "send":
+			sub = "push"
+			args = args[1:]
+		case "copy":
+			sub = "copy"
+			args = args[1:]
 		case "help", "-h", "--help":
-			fmt.Print(clipHelpText)
+			_, _ = io.WriteString(os.Stdout, clipHelpText)
 			return
 		}
 	}
@@ -172,10 +194,11 @@ func clip(args []string) {
 	asJSON := fs.Bool("json", false, "output JSON")
 
 	var latest int
-	var onlySelected, all, keep bool
-	var outDir string
+	var onlySelected, all, keep, noCopy bool
+	var outDir, note string
 	defaultOut := filepath.Join(os.TempDir(), "fdsync-clip")
-	if sub == "get" {
+	switch sub {
+	case "get":
 		fs.IntVar(&latest, "latest", 0, "download the newest N screenshots (ignoring panel selection)")
 		fs.IntVar(&latest, "n", 0, "shorthand for --latest")
 		fs.BoolVar(&onlySelected, "selected", false, "download only screenshots selected in the panel")
@@ -183,6 +206,9 @@ func clip(args []string) {
 		fs.StringVar(&outDir, "out", defaultOut, "directory to save downloaded PNG files")
 		fs.StringVar(&outDir, "o", defaultOut, "shorthand for --out")
 		fs.BoolVar(&keep, "keep", false, "keep previous files in the default output directory")
+	case "push":
+		fs.StringVar(&note, "note", "", "optional short note shown in Windows notification and panel")
+		fs.BoolVar(&noCopy, "no-copy", false, "do not write the image to the Windows clipboard")
 	}
 	fs.Usage = func() {
 		fmt.Fprint(os.Stderr, clipUsage)
@@ -198,6 +224,15 @@ func clip(args []string) {
 		fatal(err)
 	}
 	defer release()
+
+	if sub == "push" {
+		clipPush(ctx, src, fs.Args(), note, !noCopy, *asJSON)
+		return
+	}
+	if sub == "copy" {
+		clipCopyText(ctx, src, fs.Args())
+		return
+	}
 
 	list, err := src.ClipboardList(ctx)
 	if err != nil {
@@ -382,6 +417,63 @@ func openClipboardSource(ctx context.Context, dataDir, credPath, serverURL, toke
 		Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 	return c, func() { lock.Close() }, nil
+}
+
+func clipPush(ctx context.Context, src client.ClipboardSource, args []string, note string, copyToWin, asJSON bool) {
+	var (
+		data []byte
+		err  error
+	)
+	switch {
+	case len(args) == 0 || (len(args) == 1 && args[0] == "-"):
+		if len(args) == 0 {
+			if fi, _ := os.Stdin.Stat(); fi != nil && (fi.Mode()&os.ModeCharDevice) != 0 {
+				fatal(errors.New("give an image file path (or pipe image bytes via stdin): fdsync clip push <image.png>"))
+			}
+		}
+		data, err = io.ReadAll(io.LimitReader(os.Stdin, (25<<20)+1))
+	case len(args) == 1:
+		data, err = os.ReadFile(args[0])
+		if note == "" {
+			note = filepath.Base(args[0])
+		}
+	default:
+		fatal(errors.New("give one image path at a time: fdsync clip push <image.png>"))
+	}
+	if err != nil {
+		fatal(err)
+	}
+	item, err := src.ClipboardPush(ctx, data, note, copyToWin)
+	if err != nil {
+		fatal(err)
+	}
+	if asJSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(item)
+		return
+	}
+	fmt.Printf("Sent to Windows: %s (%dx%d, %s)\n", item.ID, item.Width, item.Height, humanBytes(item.Size))
+}
+
+func clipCopyText(ctx context.Context, src client.ClipboardSource, args []string) {
+	var text string
+	if len(args) > 0 && !(len(args) == 1 && args[0] == "-") {
+		text = strings.Join(args, " ")
+	} else {
+		b, err := io.ReadAll(io.LimitReader(os.Stdin, (4<<20)+1))
+		if err != nil {
+			fatal(err)
+		}
+		text = string(b)
+	}
+	if text == "" {
+		fatal(errors.New("nothing to copy: pass text as arguments or pipe via stdin"))
+	}
+	if err := src.ClipboardPushText(ctx, text); err != nil {
+		fatal(err)
+	}
+	fmt.Printf("Copied %d character(s) to Windows clipboard.\n", len([]rune(text)))
 }
 
 func cleanClipDir(dir string) {

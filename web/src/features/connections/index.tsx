@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { Link } from '@tanstack/react-router'
-import { ArrowRight, Columns2, Copy, FolderSync, Plus, ShieldCheck, Terminal } from 'lucide-react'
+import { ArrowRight, ArrowUpCircle, Columns2, Copy, FolderSync, Plus, ShieldCheck, Terminal } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { ago, formatRate } from '@/lib/format'
+import { ago, formatRate, isNewerVersion } from '@/lib/format'
 import { useQuery } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { api } from '@/api/client'
@@ -24,7 +24,7 @@ import { OnlineDot, SyncState } from '@/components/status'
 
 export function Connections() {
   const { t } = useTranslation()
-  const { connections, folders, pairing, conflicts, bindings } = useData()
+  const { server, connections, folders, pairing, conflicts, bindings } = useData()
   return (
     <PageShell
       title={t('connections.title')}
@@ -57,6 +57,7 @@ export function Connections() {
         {connections.map((c) => {
           const bs = bindings.filter((b) => b.connectionId === c.id)
           const kc = conflicts.filter((k) => k.connectionId === c.id).length
+          const outdated = isNewerVersion(server?.version, c.version)
           return (
             <Card key={c.id} className='gap-4'>
               <CardHeader className='flex flex-row items-start gap-3'>
@@ -70,13 +71,27 @@ export function Connections() {
                   </CardTitle>
                   <div className='text-xs text-muted-foreground'>
                     {c.distro} · <span className='font-mono'>{c.address}</span> · {c.networkMode}
+                    {c.version ? ` · v${c.version}` : ''}
                   </div>
                 </div>
-                {kc > 0 && (
-                  <Badge variant='outline' className='border-amber-500/40 text-amber-600 dark:text-amber-400'>
-                    {t('common.conflicts', { count: kc })}
-                  </Badge>
-                )}
+                <div className='flex flex-wrap items-center justify-end gap-1.5'>
+                  {outdated && server?.version && (
+                    <button
+                      type='button'
+                      onClick={() => void copyText('fdsync upgrade').then(() => toast.success(t('connections.upgradeCopied')))}
+                      title={t('connections.upgradeCopy')}
+                      className='inline-flex items-center gap-1 rounded-full border border-sky-500/40 bg-sky-500/5 px-2 py-0.5 text-xs font-medium text-sky-600 transition-colors hover:bg-sky-500/15 dark:text-sky-400'
+                    >
+                      <ArrowUpCircle className='size-3.5' />
+                      {t('connections.updateAvailable', { version: server.version })}
+                    </button>
+                  )}
+                  {kc > 0 && (
+                    <Badge variant='outline' className='border-amber-500/40 text-amber-600 dark:text-amber-400'>
+                      {t('common.conflicts', { count: kc })}
+                    </Badge>
+                  )}
+                </div>
               </CardHeader>
               <CardContent className='space-y-2'>
                 {bs.length === 0 && (

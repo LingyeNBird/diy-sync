@@ -83,17 +83,21 @@ type Autostart interface {
 
 // Status is a summary for the tray icon.
 type Status struct {
-	Paused      bool
-	PausedUntil time.Time // zero = until resumed
-	Conflicts   int
-	Online      int // connections seen lately
-	Connections int
+	Paused          bool
+	PausedUntil     time.Time // zero = until resumed
+	ClipboardPaused bool
+	Conflicts       int
+	Online          int // connections seen lately
+	Connections     int
 }
 
 // Status returns what the tray icon shows.
 func (s *Server) Status() Status {
 	var st Status
 	st.Paused, st.PausedUntil = s.pauseState()
+	if s.clip != nil {
+		st.ClipboardPaused = s.clip.isPaused()
+	}
 	for _, f := range s.folderList() {
 		cs, _ := f.conflicts()
 		st.Conflicts += len(cs)
